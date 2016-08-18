@@ -25,6 +25,7 @@ mod peer_storage;
 mod snap;
 pub mod util;
 mod worker;
+mod raft_log_cache;
 
 pub use self::msg::{Msg, Callback, Tick};
 pub use self::store::{Store, create_event_loop};

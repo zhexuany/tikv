@@ -12,13 +12,17 @@
 // limitations under the License.
 
 use std::option::Option;
+use std::vec::Vec;
 
 use uuid::Uuid;
+use protobuf::Message;
 
 use kvproto::metapb;
 use kvproto::eraftpb::{self, ConfChangeType};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use raftstore::{Result, Error};
+
+const UUID_BYTES: usize = 16usize;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     for peer in region.get_peers() {
@@ -47,6 +51,20 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
 
 pub fn get_uuid_from_req(cmd: &RaftCmdRequest) -> Option<Uuid> {
     Uuid::from_bytes(cmd.get_header().get_uuid())
+}
+
+pub fn encode_req(cmd: &RaftCmdRequest) -> Result<Vec<u8>> {
+    let mut data = try!(cmd.write_to_bytes());
+    let mut data_with_uuid = vec![];
+    data_with_uuid.extend_from_slice(cmd.get_header().get_uuid());
+    data_with_uuid.append(&mut data);
+    Ok(data_with_uuid)
+}
+
+pub fn decode_uuid(bytes: &[u8]) -> Vec<u8> {
+    let mut uuid = Vec::new();
+    uuid.extend_from_slice(&bytes[0..UUID_BYTES]);
+    uuid
 }
 
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {

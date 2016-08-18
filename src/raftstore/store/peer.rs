@@ -43,8 +43,11 @@ use super::cmd_resp;
 use super::transport::Transport;
 use super::keys;
 use super::engine::{Snapshot, Peekable, Mutable};
+use super::raft_log_cache::RaftLogCache;
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+
+const RAFT_LOG_CACHE_MAXSIZE: usize = 3000;
 
 pub struct PendingCmd {
     pub uuid: Uuid,
@@ -149,6 +152,7 @@ pub struct Peer {
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
     pending_cmds: PendingCmdQueue,
+    log_cache: RaftLogCache,
     peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     // Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
@@ -236,6 +240,7 @@ impl Peer {
             region_id: region.get_id(),
             raft_group: raft_group,
             pending_cmds: Default::default(),
+            log_cache: RaftLogCache::new(RAFT_LOG_CACHE_MAXSIZE),
             peer_cache: store.peer_cache(),
             peer_heartbeats: HashMap::new(),
             coprocessor_host: CoprocessorHost::new(),
@@ -425,6 +430,8 @@ impl Peer {
 
         if !self.is_leader() {
             try!(self.send(trans, &ready.messages));
+            // clean raft log cache if we are now leader
+            self.log_cache.clear()
         }
 
         let exec_results = try!(self.handle_raft_commit_entries(&ready.committed_entries));
@@ -573,7 +580,10 @@ impl Peer {
     fn propose_normal(&mut self, mut cmd: RaftCmdRequest) -> Result<()> {
         // TODO: validate request for unexpected changes.
         try!(self.coprocessor_host.pre_propose(&self.raft_group.get_store(), &mut cmd));
-        let data = try!(cmd.write_to_bytes());
+        let data = try!(util::encode_req(&cmd));
+        let mut uuid = vec![];
+        uuid.extend_from_slice(cmd.get_header().get_uuid());
+        self.log_cache.put(uuid, cmd);
         try!(self.raft_group.propose(data));
         Ok(())
     }
@@ -606,7 +616,7 @@ impl Peer {
 
     fn propose_conf_change(&mut self, cmd: RaftCmdRequest) -> Result<()> {
         metric_incr!("raftstore.propose.conf_change");
-        let data = try!(cmd.write_to_bytes());
+        let data = try!(util::encode_req(&cmd));
         let change_peer = get_change_peer_cmd(&cmd).unwrap();
 
         let mut cc = eraftpb::ConfChange::new();
@@ -619,6 +629,9 @@ impl Peer {
               cc.get_change_type(),
               cc.get_node_id());
 
+        let mut uuid = vec![];
+        uuid.extend_from_slice(&cmd.get_header().get_uuid());
+        self.log_cache.put(uuid, cmd.clone());
         self.raft_group.propose_conf_change(cc).map_err(From::from)
     }
 
@@ -790,7 +803,11 @@ impl Peer {
             return Ok(None);
         }
 
-        let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data));
+        let uuid = util::decode_uuid(data);
+        let cmd = match self.log_cache.get(uuid) {
+            Some(cmd) => cmd,
+            None => try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data)),
+        };
         // no need to return error here.
         self.process_raft_cmd(index, term, cmd).or_else(|e| {
             error!("{} process raft command at index {} err: {:?}",
