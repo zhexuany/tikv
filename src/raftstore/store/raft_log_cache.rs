@@ -58,11 +58,9 @@ impl RaftLogCache {
 
     pub fn get(&mut self, uuid: Uuid) -> Option<RaftCmdRequest> {
         if !self.contains(&uuid) {
-            println!("get {:?} miss", &uuid);
             self.stat.miss += 1;
             None
         } else {
-            println!("get {:?} hit", &uuid);
             self.stat.hit += 1;
             assert_eq!(self.uuids.front().unwrap(), &uuid);
             // self.remove(&uuid);
@@ -71,7 +69,6 @@ impl RaftLogCache {
     }
 
     pub fn put(&mut self, uuid: Uuid, req: RaftCmdRequest) {
-        println!("log cache to put {:?}: {:?}", &uuid, &req);
         if self.len() >= self.max_size {
             self.remove_first();
         }

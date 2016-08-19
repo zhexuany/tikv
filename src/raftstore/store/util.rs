@@ -61,10 +61,10 @@ pub fn encode_req(cmd: &RaftCmdRequest) -> Result<Vec<u8>> {
     Ok(data_with_uuid)
 }
 
-pub fn decode_uuid(bytes: &[u8]) -> Vec<u8> {
+pub fn decode_req(bytes: &[u8]) -> (Vec<u8>, &[u8]) {
     let mut uuid = Vec::new();
     uuid.extend_from_slice(&bytes[0..UUID_BYTES]);
-    uuid
+    (uuid, &bytes[UUID_BYTES..])
 }
 
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {

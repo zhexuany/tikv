@@ -803,7 +803,7 @@ impl Peer {
             return Ok(None);
         }
 
-        let uuid = util::decode_uuid(data);
+        let (uuid, data) = util::decode_req(data);
         let cmd = match self.log_cache.get(uuid) {
             Some(cmd) => cmd,
             None => try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data)),
@@ -825,7 +825,14 @@ impl Peer {
         let term = entry.get_term();
         let mut conf_change =
             try!(protobuf::parse_from_bytes::<eraftpb::ConfChange>(entry.get_data()));
-        let cmd = try!(protobuf::parse_from_bytes::<RaftCmdRequest>(conf_change.get_context()));
+
+        let cmd = {
+            let (uuid, data) = util::decode_req(conf_change.get_context());
+            match self.log_cache.get(uuid) {
+                Some(cmd) => cmd,
+                None => try!(protobuf::parse_from_bytes::<RaftCmdRequest>(data)),
+            }
+        };
         let res = match self.process_raft_cmd(index, term, cmd) {
             a @ Ok(Some(_)) => a,
             e => {
