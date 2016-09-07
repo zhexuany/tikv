@@ -155,7 +155,7 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                              "rocksdb.block-based-table.block-cache-size",
                                              matches,
                                              config,
-                                             Some(1024 * 1024 * 1024),
+                                             Some(64 * 1024 * 1024),
                                              |v| v.as_integer());
     block_base_opts.set_lru_cache(block_cache_size as u64);
     let bloom_bits_per_key = get_integer_value("",
@@ -185,7 +185,7 @@ fn get_rocksdb_default_cf_option(matches: &Matches, config: &toml::Value) -> Roc
                                               "rocksdb.write-buffer-size",
                                               matches,
                                               config,
-                                              Some(64 * 1024 * 1024),
+                                              Some(32 * 1024 * 1024),
                                               |v| v.as_integer());
     opts.set_write_buffer_size(write_buffer_size as u64);
 
@@ -265,7 +265,7 @@ fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(16 * 1024);
-    block_base_opts.set_lru_cache(32 * 1024 * 1024);
+    block_base_opts.set_lru_cache(16 * 1024 * 1024);
     block_base_opts.set_bloom_filter(10, false);
     opts.set_block_based_table_factory(&block_base_opts);
 
@@ -294,7 +294,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                              "rocksdb.block-based-table.block-cache-size",
                                              matches,
                                              config,
-                                             Some(1024 * 1024 * 1024),
+                                             Some(64 * 1024 * 1024),
                                              |v| v.as_integer());
     let write_cf_block_cache_size: u64 = block_cache_size as u64 / 4;
     block_base_opts.set_lru_cache(write_cf_block_cache_size);
@@ -313,7 +313,7 @@ fn get_rocksdb_write_cf_option(matches: &Matches, config: &toml::Value) -> Rocks
                                               "rocksdb.writecf.write-buffer-size",
                                               matches,
                                               config,
-                                              Some(64 * 1024 * 1024),
+                                              Some(32 * 1024 * 1024),
                                               |v| v.as_integer());
     opts.set_write_buffer_size(write_buffer_size as u64);
 
@@ -360,7 +360,7 @@ fn get_rocksdb_raftlog_cf_option() -> RocksdbOptions {
     let mut opts = RocksdbOptions::new();
     let mut block_base_opts = BlockBasedOptions::new();
     block_base_opts.set_block_size(16 * 1024);
-    block_base_opts.set_lru_cache(256 * 1024 * 1024);
+    block_base_opts.set_lru_cache(32 * 1024 * 1024);
     block_base_opts.set_bloom_filter(10, false);
     opts.set_block_based_table_factory(&block_base_opts);
 
