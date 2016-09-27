@@ -15,11 +15,15 @@ mod store;
 mod scheduler;
 mod latch;
 
+
+mod compaction_filter;
+
 use std::error;
 use std::io::Error as IoError;
 
 pub use self::scheduler::{Scheduler, Msg, GC_BATCH_SIZE};
 pub use self::store::SnapshotStore;
+pub use self::compaction_filter::{DataGCFilter, WriteGCFilter};
 
 quick_error! {
     #[derive(Debug)]

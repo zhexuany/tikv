@@ -19,6 +19,7 @@ mod write;
 use std::io;
 pub use self::txn::MvccTxn;
 pub use self::reader::MvccReader;
+pub use self::write::{Write, WriteType};
 use util::escape;
 
 quick_error! {
