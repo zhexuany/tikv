@@ -80,7 +80,7 @@ impl Runner {
             box_try!(wb.delete_cf(handle, &key));
         }
         // It's not safe to disable WAL here. We may lost data after crashed for unknown reason.
-        engine.write(wb).unwrap();
+        engine.write_without_wal(wb).unwrap();
         Ok(end_idx - first_idx)
     }
 }

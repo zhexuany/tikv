@@ -966,7 +966,7 @@ impl Peer {
             let engine = self.engine.clone();
             let raft_cf = try!(rocksdb::get_cf_handle(engine.as_ref(), CF_RAFT));
             try!(wb.put_msg_cf(raft_cf, &keys::apply_state_key(self.region_id), &state));
-            try!(self.engine.write(wb));
+            try!(self.engine.write_without_wal(wb));
             self.mut_store().apply_state = state;
             self.mut_store().applied_index_term = term;
             assert!(term > 0);
@@ -1091,7 +1091,7 @@ impl Peer {
         // Commit write and change storage fields atomically.
         self.mut_store()
             .engine
-            .write(ctx.wb)
+            .write_without_wal(ctx.wb)
             .unwrap_or_else(|e| panic!("{} failed to commit apply result: {:?}", self.tag, e));
 
         let mut storage = self.mut_store();
