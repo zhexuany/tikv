@@ -265,7 +265,8 @@ impl Conn {
     fn try_write(&mut self) -> Result<()> {
         try!(self.send_buffer.write_to(&mut self.sock));
 
-        if self.send_buffer.capacity() > self.buffer_shrink_threshold {
+        if self.send_buffer.is_empty() &&
+           self.send_buffer.capacity() > self.buffer_shrink_threshold {
             self.send_buffer.shrink_to(DEFAULT_SEND_BUFFER_SIZE);
         }
 
