@@ -246,37 +246,45 @@ impl Conn {
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        try!(self.send_buffer.write_to(&mut self.sock));
-        if !self.send_buffer.is_empty() {
-            // we don't write all data, so must try later.
-            // we have already registered writable, no need registering again.
-            return Ok(());
-        }
+        try!(self.try_write());
 
-        // no data for writing, remove writable
-        if self.send_buffer.capacity() > self.buffer_shrink_threshold {
-            self.send_buffer.shrink_to(DEFAULT_SEND_BUFFER_SIZE);
+        if self.send_buffer.is_empty() {
+            // we have already sent all data, remove Writable from EventLoop.
+            self.interest.remove(EventSet::writable());
+            try!(self.reregister(event_loop));
         }
-        self.interest.remove(EventSet::writable());
-        try!(self.reregister(event_loop));
 
         Ok(())
     }
 
 
-    pub fn append_write_buf<T, S>(&mut self,
-                                  event_loop: &mut EventLoop<Server<T, S>>,
-                                  msg: ConnData)
-                                  -> Result<()>
+    pub fn append_write_buf(&mut self, msg: ConnData) {
+        msg.encode_to(&mut self.send_buffer).unwrap();
+    }
+
+    fn try_write(&mut self) -> Result<()> {
+        try!(self.send_buffer.write_to(&mut self.sock));
+
+        if self.send_buffer.capacity() > self.buffer_shrink_threshold {
+            self.send_buffer.shrink_to(DEFAULT_SEND_BUFFER_SIZE);
+        }
+
+        Ok(())
+    }
+
+    pub fn write<T, S>(&mut self, event_loop: &mut EventLoop<Server<T, S>>) -> Result<()>
         where T: RaftStoreRouter,
               S: StoreAddrResolver
     {
-        msg.encode_to(&mut self.send_buffer).unwrap();
+        // We have already registered Writable in EventLoop, so send data later when Writable.
+        if self.interest.is_writable() {
+            return Ok(());
+        }
 
-        if !self.interest.is_writable() {
-            // re-register writable if we have not,
-            // if registered, we can only remove this flag when
-            // writing all data in writable function.
+        try!(self.try_write());
+
+        if !self.send_buffer.is_empty() {
+            // We don't send all data, so register Writable in EventLoop
             self.interest.insert(EventSet::writable());
             try!(self.reregister(event_loop));
         }

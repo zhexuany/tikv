@@ -89,6 +89,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     resolver: S,
 
     cfg: Config,
+
+    pending_write_conns: HashSet<Token>,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -129,6 +131,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             snap_worker: snap_worker,
             resolver: resolver,
             cfg: cfg.clone(),
+            pending_write_conns: HashSet::new(),
         };
 
         Ok(svr)
@@ -345,19 +348,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         }
     }
 
-    fn write_data(&mut self, event_loop: &mut EventLoop<Self>, token: Token, data: ConnData) {
-        let res = match self.conns.get_mut(&token) {
+    fn write_data(&mut self, _: &mut EventLoop<Self>, token: Token, data: ConnData) {
+        match self.conns.get_mut(&token) {
             None => {
                 debug!("missing conn for token {:?}", token);
                 return;
             }
-            Some(conn) => conn.append_write_buf(event_loop, data),
+            Some(conn) => conn.append_write_buf(data),
         };
 
-        if let Err(e) = res {
-            debug!("handle write data err {:?}, remove", e);
-            self.remove_conn(event_loop, token);
-        }
+        self.pending_write_conns.insert(token);
     }
 
     fn try_connect(&mut self,
@@ -540,6 +540,24 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             }
         }
     }
+
+    fn on_pending_write_conns(&mut self, event_loop: &mut EventLoop<Self>) {
+        let tokens: Vec<Token> = self.pending_write_conns.drain().collect();
+
+        for token in tokens {
+            let res = {
+                match self.conns.get_mut(&token) {
+                    Some(conn) => conn.write(event_loop),
+                    None => Ok(()),
+                }
+            };
+
+            if let Err(e) = res {
+                debug!("handle write conn err {:?}, remove", e);
+                self.remove_conn(event_loop, token);
+            }
+        }
+    }
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
@@ -603,7 +621,11 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             if let Some(Err(e)) = snap_handle.map(|h| h.join()) {
                 error!("failed to stop snap handler: {:?}", e);
             }
+
+            return;
         }
+
+        self.on_pending_write_conns(el);
     }
 }
 
