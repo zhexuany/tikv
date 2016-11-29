@@ -210,12 +210,21 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
 
+    let base_backgroud_compacitons =
+        get_toml_int(config, "rocksdb.base-background-compactions", Some(1));
+    opts.set_base_background_compactions(base_backgroud_compacitons as i32);
+
     let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
     opts.set_max_background_flushes(max_background_flushes as i32);
 
     let compaction_readahead_size =
         get_toml_int(config, "rocksdb.compaction-readahead-size", Some(0));
     opts.set_compaction_readahead_size(compaction_readahead_size as usize);
+
+    let writable_file_max_buffer_size = get_toml_int(config,
+                                                     "rocksdb.writable-file-max-buffer-size",
+                                                     Some(1024 * 1024));
+    opts.set_writable_file_max_buffer_size(writable_file_max_buffer_size as usize);
 
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
