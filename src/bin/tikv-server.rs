@@ -352,9 +352,9 @@ fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
 
     // set num level = 3, this will cause compaction more frequently,
     // this is usefull for lock cf.
-    opts.set_num_levels(3);
+    opts.set_num_levels(4);
 
-    let cpl = "no:no:no".to_owned();
+    let cpl = "no:no:no:no".to_owned();
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
     let write_buffer_size = get_toml_int(config,
