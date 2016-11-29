@@ -92,6 +92,10 @@ max-background-compactions = 6
 # Maximum number of concurrent background flush jobs
 max-background-flushes = 2
 
+base-background-compactions = 1
+
+disable-data-sync = false
+
 # Number of open files that can be used by the DB.  You may need to
 # increase this if your database has a large working set. Value -1 means
 # files opened are always kept open. You can estimate number of files based

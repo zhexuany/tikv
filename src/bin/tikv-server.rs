@@ -213,10 +213,17 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
     let max_background_flushes = get_toml_int(config, "rocksdb.max-background-flushes", Some(2));
     opts.set_max_background_flushes(max_background_flushes as i32);
 
+    let base_backgroud_compacitons =
+        get_toml_int(config, "rocksdb.base-background-compactions", Some(1));
+    opts.set_base_background_compactions(base_backgroud_compacitons as i32);
+
     let max_manifest_file_size = get_toml_int(config,
                                               "rocksdb.max-manifest-file-size",
                                               Some(20 * 1024 * 1024));
     opts.set_max_manifest_file_size(max_manifest_file_size as u64);
+
+    let disable_data_sync = get_toml_boolean(config, "rocksdb.disable-data-sync", Some(false));
+    opts.set_disable_data_sync(disable_data_sync);
 
     let create_if_missing = get_toml_boolean(config, "rocksdb.create-if-missing", Some(true));
     opts.create_if_missing(create_if_missing);
