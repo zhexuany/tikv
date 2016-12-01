@@ -93,6 +93,16 @@ impl<'a> MvccTxn<'a> {
         self.reader.get(key, self.start_ts)
     }
 
+    pub fn importdata(&mut self, mutation: Mutation) -> Result<()> {
+        let key = mutation.key();
+        if let Mutation::Put((_, ref value)) = mutation {
+            let ts = self.start_ts;
+            self.put_value(key, ts, value.clone());
+            self.put_write(key, ts, Write::new(WriteType::Put, ts).to_bytes());
+        }
+        Ok(())
+    }
+
     pub fn prewrite(&mut self, mutation: Mutation, primary: &[u8], lock_ttl: u64) -> Result<()> {
         let key = mutation.key();
         if let Some((commit, _)) = try!(self.reader.seek_write(&key, u64::max_value())) {

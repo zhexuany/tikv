@@ -126,6 +126,11 @@ pub enum Command {
         scan_key: Option<Key>,
         keys: Vec<Key>,
     },
+    ImportData {
+        ctx: Context,
+        mutations: Vec<Mutation>,
+        ts: u64,
+    },
 }
 
 impl Display for Command {
@@ -191,6 +196,13 @@ impl Display for Command {
                        safe_point,
                        ctx)
             }
+            Command::ImportData { ref ctx, ref mutations, ts } => {
+                write!(f,
+                       "kv::command::importdata mutations({}) @ {} | {:?}",
+                       mutations.len(),
+                       ts,
+                       ctx)
+            }
         }
     }
 }
@@ -226,6 +238,7 @@ impl Command {
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
             Command::Gc { .. } => "gc",
+            Command::ImportData { .. } => "import_data",
         }
     }
 }
@@ -374,6 +387,23 @@ impl Storage {
         };
         let tag = cmd.tag();
         try!(self.send(cmd, StorageCb::KvPairs(callback)));
+        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        Ok(())
+    }
+
+    pub fn async_importdata(&self,
+                            ctx: Context,
+                            mutations: Vec<Mutation>,
+                            ts: u64,
+                            callback: Callback<Vec<Result<()>>>)
+                            -> Result<()> {
+        let cmd = Command::ImportData {
+            ctx: ctx,
+            mutations: mutations,
+            ts: ts,
+        };
+        let tag = cmd.tag();
+        try!(self.send(cmd, StorageCb::Booleans(callback)));
         KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
         Ok(())
     }

@@ -472,6 +472,16 @@ fn process_write_impl(cid: u64,
                 (pr, txn.modifies())
             }
         }
+        Command::ImportData { ref mutations, ts, .. } => {
+            let mut txn = MvccTxn::new(snapshot, ts, None);
+            let mut results = vec![];
+            for m in mutations {
+                try!(txn.importdata(m.clone()));
+                results.push(Ok(()));
+            }
+            let pr = ProcessResult::MultiRes { results: results };
+            (pr, txn.modifies())
+        }
         _ => panic!("unsupported write command"),
     };
 
@@ -497,6 +507,7 @@ fn extract_ctx(cmd: &Command) -> &Context {
         Command::Rollback { ref ctx, .. } |
         Command::ScanLock { ref ctx, .. } |
         Command::ResolveLock { ref ctx, .. } |
+        Command::ImportData { ref ctx, .. } |
         Command::Gc { ref ctx, .. } => ctx,
     }
 }
