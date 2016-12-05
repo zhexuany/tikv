@@ -238,7 +238,9 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
 fn get_rocksdb_cf_option(config: &toml::Value,
                          cf: &str,
                          block_cache_default: i64,
-                         use_bloom_filter: bool)
+                         use_bloom_filter: bool,
+                         l0_file_num: i64,
+                         num_levels: i64)
                          -> RocksdbOptions {
     let prefix = String::from("rocksdb.") + cf + ".";
     let mut opts = RocksdbOptions::new();
@@ -311,6 +313,16 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                      Some(16));
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
+    let level0_file_num = get_toml_int(config,
+                                       (prefix.clone() + "level0-file-num").as_str(),
+                                       Some(l0_file_num));
+    opts.set_level_zero_file_num_compaction_trigger(level0_file_num as i32);
+
+    let num_levels = get_toml_int(config,
+                                  (prefix.clone() + "num-levels").as_str(),
+                                  Some(num_levels));
+    opts.set_num_levels(num_levels as i32);
+
     opts
 }
 
@@ -319,40 +331,23 @@ fn get_rocksdb_default_cf_option(config: &toml::Value) -> RocksdbOptions {
     get_rocksdb_cf_option(config,
                           "defaultcf",
                           1024 * 1024 * 1024,
-                          true /* bloom filter */)
+                          true, // bloom filter
+                          4, // level0 file num
+                          7 /* num levels */)
 }
 
 fn get_rocksdb_write_cf_option(config: &toml::Value) -> RocksdbOptions {
     // Don't need set bloom filter for write cf, because we use seek to get the correct
     // version base on provided timestamp.
-    get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, false)
+    get_rocksdb_cf_option(config, "writecf", 256 * 1024 * 1024, false, 4, 7)
 }
 
 fn get_rocksdb_raftlog_cf_option(config: &toml::Value) -> RocksdbOptions {
-    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false)
+    get_rocksdb_cf_option(config, "raftcf", 256 * 1024 * 1024, false, 4, 7)
 }
 
-fn get_rocksdb_lock_cf_option() -> RocksdbOptions {
-    let mut opts = RocksdbOptions::new();
-    let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_block_size(16 * 1024);
-    block_base_opts.set_lru_cache(32 * 1024 * 1024);
-    block_base_opts.set_bloom_filter(10, false);
-    opts.set_block_based_table_factory(&block_base_opts);
-
-    let cpl = "no:no:no:no:no:no:no".to_owned();
-    let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
-    opts.compression_per_level(&per_level_compression);
-    opts.set_write_buffer_size(32 * 1024 * 1024);
-    opts.set_max_write_buffer_number(5);
-    opts.set_max_bytes_for_level_base(32 * 1024 * 1024);
-    opts.set_target_file_size_base(32 * 1024 * 1024);
-
-    // set level0_file_num_compaction_trigger = 1 is very important,
-    // this will result in fewer sst files in lock cf.
-    opts.set_level_zero_file_num_compaction_trigger(1);
-
-    opts
+fn get_rocksdb_lock_cf_option(config: &toml::Value) -> RocksdbOptions {
+    get_rocksdb_cf_option(config, "lockcf", 64 * 1024 * 1024, true, 1, 3)
 }
 
 
@@ -476,7 +471,7 @@ fn build_raftkv(config: &toml::Value,
     let path = Path::new(&cfg.storage.path).to_path_buf();
     let opts = get_rocksdb_db_option(config);
     let cfs_opts = vec![get_rocksdb_default_cf_option(config),
-                        get_rocksdb_lock_cf_option(),
+                        get_rocksdb_lock_cf_option(config),
                         get_rocksdb_write_cf_option(config),
                         get_rocksdb_raftlog_cf_option(config)];
     let mut db_path = path.clone();
