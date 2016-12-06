@@ -296,7 +296,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/jemalloc#48c03ff287bef5be4f8e555e00c5ecbc0ab72ffa"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/jemalloc#37260ffc628b101a37c08d68994b6278ed3a691d"
 dependencies = [
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -524,7 +524,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/jemalloc#48c03ff287bef5be4f8e555e00c5ecbc0ab72ffa"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/jemalloc#37260ffc628b101a37c08d68994b6278ed3a691d"
 dependencies = [
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/jemalloc)",
