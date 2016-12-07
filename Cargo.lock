@@ -296,7 +296,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/base-bg-compaction#aa0552804f42b8f0b3132ff2328f6ac87db903a8"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/base-bg-compaction#5bd5e82be3a26afeea241a55c479db5c72ff0fee"
 dependencies = [
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -524,7 +524,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/base-bg-compaction#aa0552804f42b8f0b3132ff2328f6ac87db903a8"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/base-bg-compaction#5bd5e82be3a26afeea241a55c479db5c72ff0fee"
 dependencies = [
  "libc 0.2.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "librocksdb_sys 0.1.0 (git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=zhangjinpeng/base-bg-compaction)",
