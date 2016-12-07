@@ -17,7 +17,7 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use std::collections::HashMap;
 
 use url;
-use rocksdb::{DBCompressionType, DBRecoveryMode};
+use rocksdb::{DBCompressionType, DBRecoveryMode, DBCompactionPri};
 use regex::Regex;
 
 quick_error! {
@@ -69,6 +69,16 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
     }
 
     Ok(result)
+}
+
+pub fn parse_rocksdb_compaction_pri(pri: i64) -> Result<DBCompactionPri, ConfigError> {
+    match pri {
+        0 => Ok(DBCompactionPri::ByCompensatedSize),
+        1 => Ok(DBCompactionPri::OldestLargestSeqFirst),
+        2 => Ok(DBCompactionPri::OldestSmallestSeqFirst),
+        3 => Ok(DBCompactionPri::MinOverlappingRatio),
+        _ => Err(ConfigError::RocksDB),
+    }
 }
 
 pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ConfigError> {

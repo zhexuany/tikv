@@ -276,6 +276,12 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     let per_level_compression = util::config::parse_rocksdb_per_level_compression(&cpl).unwrap();
     opts.compression_per_level(&per_level_compression);
 
+    let cpri = get_toml_int(config,
+                            (prefix.clone() + "compaction-pri").as_str(),
+                            Some(0));
+    let compaction_pri = util::config::parse_rocksdb_compaction_pri(cpri).unwrap();
+    opts.set_compaction_pri(compaction_pri);
+
     let write_buffer_size = get_toml_int(config,
                                          (prefix.clone() + "write-buffer-size").as_str(),
                                          Some(64 * 1024 * 1024));
