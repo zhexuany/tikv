@@ -236,6 +236,13 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
         opts.set_stats_dump_period_sec(stats_dump_period_sec as usize);
     }
 
+    let max_log_file_size =
+        get_toml_int(config, "rocksdb.max-log-file-size", Some(100 * 1024 * 1024));
+    opts.set_max_log_file_size(max_log_file_size as u64);
+
+    let keep_log_file_num = get_toml_int(config, "rocksdb.keep-log-file-num", Some(10));
+    opts.set_keep_log_file_num(keep_log_file_num as u64);
+
     opts
 }
 
