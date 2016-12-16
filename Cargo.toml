@@ -57,6 +57,7 @@ clap = "2"
 url = "1.2"
 getopts = "0.2"
 regex = "0.1"
+scoped-pool = "1"
 
 [dependencies.rocksdb]
 git = "https://github.com/ngaut/rust-rocksdb.git"
