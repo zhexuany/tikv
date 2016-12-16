@@ -576,6 +576,18 @@ impl Peer {
         }
     }
 
+    pub fn handle_raft_ready<T: Transport>(&mut self,
+                                           trans: &T,
+                                           metrics: &mut RaftMetrics)
+                                           -> Result<Option<ReadyResult>> {
+        match try!(self.handle_raft_ready_append(trans, metrics)) {
+            Some(mut res) => {
+                try!(self.handle_raft_ready_apply(&mut res));
+                Ok(Some(res))
+            }
+            None => Ok(None),
+        }
+    }
 
     pub fn handle_raft_ready_append<T: Transport>(&mut self,
                                                   trans: &T,

@@ -16,6 +16,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
+use std::collections::hash_map::Entry;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
@@ -690,34 +691,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_raft_ready(&mut self) {
         let t = SlowTimer::new();
         let pending_count = self.pending_raft_groups.len();
-
         let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(pending_count);
         for region_id in self.pending_raft_groups.drain() {
-            if let Some(peer) = self.region_peers.get_mut(&region_id) {
-                match peer.handle_raft_ready_append(&self.trans, &mut self.raft_metrics) {
-                    Err(e) => {
-                        // TODO: should we panic or shutdown the store?
-                        error!("{} handle raft ready append err: {:?}", peer.tag, e);
-                        continue;
-                    }
+            if let Entry::Occupied(mut peer) = self.region_peers.entry(region_id) {
+                match peer.get_mut().handle_raft_ready(&self.trans, &mut self.raft_metrics) {
                     Ok(Some(res)) => ready_results.push((region_id, res)),
                     Ok(None) => {}
-                }
-            }
-        }
-
-        for (region_id, mut res) in ready_results {
-            {
-                let peer = self.region_peers.get_mut(&region_id).unwrap();
-
-                if let Err(e) = peer.handle_raft_ready_apply(&mut res) {
-                    // TODO: should we panic or shutdown the store?
-                    error!("{} handle raft ready err: {:?}", peer.tag, e);
-                    continue;
+                    Err(e) => {
+                        // TODO: should we panic or shutdown the store?
+                        error!("{} handle raft ready err: {:?}", peer.get_mut().tag, e);
+                    }
                 }
             };
-
-            self.on_ready_result(region_id, res)
+        }
+        for (region_id, res) in ready_results {
+            self.on_ready_result(region_id, res);
         }
 
         let dur = t.elapsed();
