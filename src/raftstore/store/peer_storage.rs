@@ -35,6 +35,7 @@ use super::worker::RegionTask;
 use super::keys::{self, enc_start_key, enc_end_key};
 use super::engine::{Snapshot as DbSnapshot, Peekable, Iterable, Mutable};
 use super::{SnapFile, SnapKey, SnapEntry, SnapManager};
+use super::raft_log_cache::RaftLogCache;
 use storage::CF_RAFT;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -49,6 +50,8 @@ pub const JOB_STATUS_CANCELLING: usize = 2;
 pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
+
+pub const RAFT_LOG_CACHE_SIZE: usize = 3000;
 
 pub type Ranges = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -76,6 +79,7 @@ impl PartialEq for SnapState {
 
 pub struct PeerStorage {
     pub engine: Arc<DB>,
+    pub raft_log_cache: RaftLogCache,
 
     pub region: metapb::Region,
     pub raft_state: RaftLocalState,
@@ -212,6 +216,7 @@ impl PeerStorage {
 
         Ok(PeerStorage {
             engine: engine,
+            raft_log_cache: RaftLogCache::new(RAFT_LOG_CACHE_SIZE),
             region: region.clone(),
             raft_state: raft_state,
             apply_state: apply_state,
@@ -273,6 +278,11 @@ impl PeerStorage {
         if low == high {
             return Ok(ents);
         }
+
+        if let Ok(res) = self.raft_log_cache.entries(low, high, max_size) {
+            return Ok(res);
+        }
+
         let mut total_size: u64 = 0;
         let mut next_index = low;
         let mut exceeded_max_size = false;
@@ -477,6 +487,8 @@ impl PeerStorage {
             return Ok(prev_last_index);
         }
 
+        self.raft_log_cache.wl().append(entries);
+
         let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
         for entry in entries {
             try!(ctx.wb.put_msg_cf(handle,
@@ -539,6 +551,8 @@ impl PeerStorage {
               region,
               ctx.apply_state);
 
+        self.raft_log_cache.wl().reset();
+
         Ok(ApplySnapResult {
             prev_region: self.region.clone(),
             region: region.clone(),
@@ -565,6 +579,8 @@ impl PeerStorage {
 
         state.mut_truncated_state().set_index(compact_index - 1);
         state.mut_truncated_state().set_term(term);
+
+        self.raft_log_cache.wl().compact_to(compact_index);
 
         Ok(())
     }
