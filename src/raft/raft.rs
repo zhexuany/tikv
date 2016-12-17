@@ -201,7 +201,7 @@ pub struct Raft<T: Storage> {
 
     /// Will be called when step** is about to be called.
     /// return false will skip step**.
-    pub before_step_state: Option<Box<FnMut(&Message) -> bool>>,
+    pub before_step_state: Option<Box<FnMut(&Message) -> bool + Send>>,
 
     /// tag is only used for logging
     tag: String,

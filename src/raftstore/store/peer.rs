@@ -11,9 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
@@ -35,7 +33,7 @@ use raft::{self, RawNode, StateRole, SnapshotStatus, Ready, ProgressState, Progr
 use raftstore::{Result, Error};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::coprocessor::split_observer::SplitObserver;
-use util::{escape, SlowTimer, rocksdb, clocktime};
+use util::{escape, SlowTimer, rocksdb, clocktime, HandyRwLock};
 use pd::{PdClient, INVALID_ID};
 use storage::{CF_LOCK, CF_RAFT};
 use super::store::Store;
@@ -188,7 +186,7 @@ pub struct ConsistencyState {
 
 pub struct Peer {
     engine: Arc<DB>,
-    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
+    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
     pub peer: metapb::Peer,
     region_id: u64,
     pub raft_group: RawNode<PeerStorage>,
@@ -576,11 +574,9 @@ impl Peer {
         }
     }
 
-    pub fn handle_raft_ready<T: Transport>(&mut self,
-                                           trans: &T,
-                                           metrics: &mut RaftMetrics)
-                                           -> Result<Option<ReadyResult>> {
-        match try!(self.handle_raft_ready_append(trans, metrics)) {
+    pub fn handle_raft_ready<T: Transport>(&mut self, trans: &T) -> Result<Option<ReadyResult>> {
+        let mut metrics = Default::default();
+        match try!(self.handle_raft_ready_append(trans, &mut metrics)) {
             Some(mut res) => {
                 try!(self.handle_raft_ready_apply(&mut res));
                 Ok(Some(res))
@@ -1040,14 +1036,14 @@ impl Peer {
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
-        if let Some(peer) = self.peer_cache.borrow().get(&peer_id).cloned() {
+        if let Some(peer) = self.peer_cache.rl().get(&peer_id).cloned() {
             return Some(peer);
         }
 
         // Try to find in region, if found, set in cache.
         for peer in self.get_store().get_region().get_peers() {
             if peer.get_id() == peer_id {
-                self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
+                self.peer_cache.wl().insert(peer_id, peer.clone());
                 return Some(peer.clone());
             }
         }
@@ -1526,7 +1522,7 @@ impl Peer {
                 // TODO: Do we allow adding peer in same node?
 
                 // Add this peer to cache.
-                self.peer_cache.borrow_mut().insert(peer.get_id(), peer.clone());
+                self.peer_cache.wl().insert(peer.get_id(), peer.clone());
                 self.peer_heartbeats.insert(peer.get_id(), Instant::now());
                 region.mut_peers().push(peer.clone());
 
@@ -1557,7 +1553,7 @@ impl Peer {
                 }
 
                 // Remove this peer from cache.
-                self.peer_cache.borrow_mut().remove(&peer.get_id());
+                self.peer_cache.wl().remove(&peer.get_id());
                 self.peer_heartbeats.remove(&peer.get_id());
                 util::remove_peer(&mut region, store_id).unwrap();
 
@@ -1639,7 +1635,7 @@ impl Peer {
             peer.set_id(peer_id);
 
             // Add this peer to cache.
-            self.peer_cache.borrow_mut().insert(peer_id, peer.clone());
+            self.peer_cache.wl().insert(peer_id, peer.clone());
         }
 
         // update region version

@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::sync::{Arc, RwLock, Mutex};
+use std::sync::mpsc::channel;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
 use std::collections::hash_map::Entry;
@@ -27,6 +26,7 @@ use protobuf;
 use fs2;
 use uuid::Uuid;
 use time::{self, Timespec};
+use threadpool::ThreadPool;
 
 use kvproto::raft_serverpb::{RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
                              PeerState};
@@ -64,7 +64,10 @@ type Key = Vec<u8>;
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 const MIO_TICK_RATIO: u64 = 10;
 
-pub struct Store<T: Transport, C: PdClient + 'static> {
+const THREAD_POOL_RAFT_READY_MIN_REGION_COUNT: usize = 16;
+const RAFT_READY_THREAD_NUM: usize = 8;
+
+pub struct Store<T: Transport + 'static, C: PdClient + 'static> {
     cfg: Config,
     store: metapb::Store,
     engine: Arc<DB>,
@@ -86,7 +89,9 @@ pub struct Store<T: Transport, C: PdClient + 'static> {
     trans: T,
     pd_client: Arc<C>,
 
-    peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
+    peer_cache: Arc<RwLock<HashMap<u64, metapb::Peer>>>,
+
+    raft_ready_worker: ThreadPool,
 
     snap_mgr: SnapManager,
 
@@ -157,7 +162,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             pending_regions: vec![],
             trans: trans,
             pd_client: pd_client,
-            peer_cache: Rc::new(RefCell::new(peer_cache)),
+            peer_cache: Arc::new(RwLock::new(peer_cache)),
+            raft_ready_worker: ThreadPool::new_with_name(thd_name!("raft-ready-pool"),
+                                                         RAFT_READY_THREAD_NUM),
             snap_mgr: mgr,
             raft_metrics: RaftMetrics::default(),
             tag: tag,
@@ -316,7 +323,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         &self.cfg
     }
 
-    pub fn peer_cache(&self) -> Rc<RefCell<HashMap<u64, metapb::Peer>>> {
+    pub fn peer_cache(&self) -> Arc<RwLock<HashMap<u64, metapb::Peer>>> {
         self.peer_cache.clone()
     }
 
@@ -685,17 +692,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn insert_peer_cache(&mut self, peer: metapb::Peer) {
-        self.peer_cache.borrow_mut().insert(peer.get_id(), peer);
+        self.peer_cache.wl().insert(peer.get_id(), peer);
     }
 
-    fn on_raft_ready(&mut self) {
-        let t = SlowTimer::new();
-        let pending_count = self.pending_raft_groups.len();
-        let mut ready_results: Vec<(u64, ReadyResult)> = Vec::with_capacity(pending_count);
-        for region_id in self.pending_raft_groups.drain() {
+    fn on_raft_ready_single_thread(&mut self, region_ids: Vec<u64>) -> Vec<(u64, ReadyResult)> {
+        let mut results: Vec<(u64, ReadyResult)> = Vec::with_capacity(region_ids.len());
+        for region_id in region_ids {
             if let Entry::Occupied(mut peer) = self.region_peers.entry(region_id) {
-                match peer.get_mut().handle_raft_ready(&self.trans, &mut self.raft_metrics) {
-                    Ok(Some(res)) => ready_results.push((region_id, res)),
+                match peer.get_mut().handle_raft_ready(&self.trans) {
+                    Ok(Some(res)) => results.push((region_id, res)),
                     Ok(None) => {}
                     Err(e) => {
                         // TODO: should we panic or shutdown the store?
@@ -704,6 +709,51 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 }
             };
         }
+        results
+    }
+
+    fn on_raft_ready_multiple_threads(&mut self, region_ids: Vec<u64>) -> Vec<(u64, ReadyResult)> {
+        let ready_results = Arc::new(Mutex::new(vec![]));
+        let (tx, rx) = channel();
+        let mut task_num = 0;
+        for region_id in region_ids {
+            if let Some(mut peer) = self.region_peers.remove(&region_id) {
+                task_num += 1;
+                let trans = self.trans.clone();
+                let ready_results = ready_results.clone();
+                let tx = tx.clone();
+                self.raft_ready_worker.execute(move || {
+                    match peer.handle_raft_ready(&trans) {
+                        Ok(Some(res)) => ready_results.lock().unwrap().push((region_id, res)),
+                        Ok(None) => {}
+                        Err(e) => {
+                            // TODO: should we panic or shutdown the store?
+                            error!("{} handle raft ready err: {:?}", peer.tag, e);
+                        }
+                    }
+                    drop(ready_results);
+                    tx.send((region_id, peer)).unwrap();
+                });
+            }
+        }
+        for _ in 0..task_num {
+            let (region_id, peer) = rx.recv().unwrap();
+            self.region_peers.insert(region_id, peer);
+        }
+        Arc::try_unwrap(ready_results).ok().unwrap().into_inner().unwrap()
+    }
+
+    fn on_raft_ready(&mut self) {
+        let t = SlowTimer::new();
+        let region_ids: Vec<_> = self.pending_raft_groups.drain().collect();
+        let pending_count = region_ids.len();
+
+        let ready_results = if pending_count < THREAD_POOL_RAFT_READY_MIN_REGION_COUNT {
+            self.on_raft_ready_single_thread(region_ids)
+        } else {
+            self.on_raft_ready_multiple_threads(region_ids)
+        };
+
         for (region_id, res) in ready_results {
             self.on_ready_result(region_id, res);
         }
@@ -1443,7 +1493,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     fn on_report_snapshot(&mut self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
         if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
             // The peer must exist in peer_cache.
-            let to_peer = match self.peer_cache.borrow().get(&to_peer_id).cloned() {
+            let to_peer = match self.peer_cache.rl().get(&to_peer_id).cloned() {
                 Some(peer) => peer,
                 None => {
                     // If to_peer is removed immediately after sending snapshot, the command
