@@ -216,7 +216,7 @@ impl PeerStorage {
 
         Ok(PeerStorage {
             engine: engine,
-            raft_log_cache: RaftLogCache::new(RAFT_LOG_CACHE_SIZE),
+            raft_log_cache: RaftLogCache::new(tag.clone(), RAFT_LOG_CACHE_SIZE),
             region: region.clone(),
             raft_state: raft_state,
             apply_state: apply_state,
@@ -487,7 +487,7 @@ impl PeerStorage {
             return Ok(prev_last_index);
         }
 
-        self.raft_log_cache.wl().append(entries);
+        self.raft_log_cache.get().append(entries);
 
         let handle = try!(rocksdb::get_cf_handle(&self.engine, CF_RAFT));
         for entry in entries {
@@ -551,7 +551,7 @@ impl PeerStorage {
               region,
               ctx.apply_state);
 
-        self.raft_log_cache.wl().reset();
+        self.raft_log_cache.get().reset();
 
         Ok(ApplySnapResult {
             prev_region: self.region.clone(),
@@ -580,7 +580,7 @@ impl PeerStorage {
         state.mut_truncated_state().set_index(compact_index - 1);
         state.mut_truncated_state().set_term(term);
 
-        self.raft_log_cache.wl().compact_to(compact_index);
+        self.raft_log_cache.get().compact_to(compact_index);
 
         Ok(())
     }
