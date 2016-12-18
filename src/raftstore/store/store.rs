@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, RwLock};
 use std::sync::mpsc::channel;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::boxed::Box;
@@ -64,8 +64,8 @@ type Key = Vec<u8>;
 const ROCKSDB_TOTAL_SST_FILE_SIZE_PROPERTY: &'static str = "rocksdb.total-sst-files-size";
 const MIO_TICK_RATIO: u64 = 10;
 
-const THREAD_POOL_RAFT_READY_MIN_REGION_COUNT: usize = 16;
-const RAFT_READY_THREAD_NUM: usize = 8;
+const THREAD_POOL_RAFT_READY_MIN_REGION_COUNT: usize = 8;
+const RAFT_READY_THREAD_NUM: usize = 4;
 
 pub struct Store<T: Transport + 'static, C: PdClient + 'static> {
     cfg: Config,
@@ -713,34 +713,36 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     fn on_raft_ready_multiple_threads(&mut self, region_ids: Vec<u64>) -> Vec<(u64, ReadyResult)> {
-        let ready_results = Arc::new(Mutex::new(vec![]));
         let (tx, rx) = channel();
         let mut task_num = 0;
         for region_id in region_ids {
             if let Some(mut peer) = self.region_peers.remove(&region_id) {
                 task_num += 1;
                 let trans = self.trans.clone();
-                let ready_results = ready_results.clone();
                 let tx = tx.clone();
                 self.raft_ready_worker.execute(move || {
+                    let mut result = None;
                     match peer.handle_raft_ready(&trans) {
-                        Ok(Some(res)) => ready_results.lock().unwrap().push((region_id, res)),
+                        Ok(Some(res)) => result = Some(res),
                         Ok(None) => {}
                         Err(e) => {
                             // TODO: should we panic or shutdown the store?
                             error!("{} handle raft ready err: {:?}", peer.tag, e);
                         }
                     }
-                    drop(ready_results);
-                    tx.send((region_id, peer)).unwrap();
+                    tx.send((region_id, peer, result)).unwrap();
                 });
             }
         }
+        let mut results = vec![];
         for _ in 0..task_num {
-            let (region_id, peer) = rx.recv().unwrap();
+            let (region_id, peer, res) = rx.recv().unwrap();
             self.region_peers.insert(region_id, peer);
+            if let Some(res) = res {
+                results.push((region_id, res));
+            }
         }
-        Arc::try_unwrap(ready_results).ok().unwrap().into_inner().unwrap()
+        results
     }
 
     fn on_raft_ready(&mut self) {
