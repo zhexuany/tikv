@@ -237,6 +237,7 @@ impl RaftLogCacheCore {
             current_size += Message::compute_size(&entry) as u64;
             res.push(entry);
             if current_size > max_size {
+                self.stat.hit += 1;
                 return Ok(res);
             }
             idx = self.next_idx(idx);
