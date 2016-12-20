@@ -25,8 +25,10 @@ const LOG_CALL_TIMES: u64 = 500;
 #[derive(Debug, Default, Clone)]
 pub struct CacheStat {
     pub call: u64,
+    pub valid: u64,
     pub hit: u64,
     pub miss: u64,
+    pub append: u64,
     pub reset: u64,
 }
 
@@ -173,6 +175,7 @@ impl RaftLogCacheCore {
     }
 
     fn append_entries(&mut self, entries: &[Entry]) {
+        self.stat.append += 1;
         for e in entries {
             self.append_entry(e.clone())
         }
@@ -224,6 +227,7 @@ impl RaftLogCacheCore {
         }
         let first_index = try!(self.first_index());
         let last_index = try!(self.last_index());
+        self.stat.valid += 1;
         if low < first_index || high > last_index {
             self.stat.miss += 1;
             return Err(raft::Error::Other(box_err!("miss cache")));
