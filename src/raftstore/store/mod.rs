@@ -22,6 +22,7 @@ pub mod util;
 
 mod store;
 mod peer;
+mod raft_log_cache;
 mod peer_storage;
 mod snap;
 mod worker;
