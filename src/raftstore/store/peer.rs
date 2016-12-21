@@ -194,6 +194,7 @@ pub struct TraceInfo {
     pub min: TimeDuration,
     pub max: TimeDuration,
     pub avg: TimeDuration,
+    pub apply_avg: TimeDuration,
 }
 
 impl TraceInfo {
@@ -203,6 +204,7 @@ impl TraceInfo {
             min: TimeDuration::zero(),
             max: TimeDuration::zero(),
             avg: TimeDuration::zero(),
+            apply_avg: TimeDuration::zero(),
         }
     }
 }
@@ -1277,6 +1279,7 @@ impl Peer {
         let uuid = util::get_uuid_from_req(&cmd).unwrap();
         let cmd_cb = self.find_cb(uuid, term, &cmd);
         let timer = PEER_APPLY_LOG_HISTOGRAM.start_timer();
+        let before_apply = time::now().to_timespec();
         let (mut resp, exec_result) = self.apply_raft_cmd(index, term, &cmd);
         timer.observe_duration();
 
@@ -1331,6 +1334,7 @@ impl Peer {
             let ts = Timespec::new(tm.get_sec(), tm.get_nsec());
             let now = time::now().to_timespec();
             let d = now - ts;
+            let apply_d = now - before_apply;
 
             // update trace info
             if self.trace_info.count == 0 || d < self.trace_info.min {
@@ -1340,8 +1344,10 @@ impl Peer {
                 self.trace_info.max = d
             }
             let total = self.trace_info.avg * self.trace_info.count as i32 + d;
+            let apply_total = self.trace_info.apply_avg * self.trace_info.count as i32 + apply_d;
             self.trace_info.count += 1;
             self.trace_info.avg = total / self.trace_info.count as i32;
+            self.trace_info.apply_avg = apply_total / self.trace_info.count as i32;
             if self.trace_info.count % TRACC_INFO_OUTPUT_COUNT == 0 {
                 info!("{} *** trace info {:?}", self.tag, self.trace_info);
             }
