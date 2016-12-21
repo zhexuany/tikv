@@ -34,7 +34,7 @@ use kvproto::eraftpb::{ConfChangeType, MessageType};
 use kvproto::pdpb::StoreStats;
 use util::{HandyRwLock, SlowTimer, duration_to_nanos, escape};
 use pd::PdClient;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse,
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, StatusCmdType, StatusResponse, Trace, Tm,
                           RaftCmdRequest, RaftCmdResponse};
 use protobuf::Message;
 use raft::{SnapshotStatus, INVALID_INDEX};
@@ -1009,7 +1009,16 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                   result_count);
     }
 
-    fn propose_raft_command(&mut self, msg: RaftCmdRequest, cb: Callback) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
+        // set trace
+        let now = time::now().to_timespec();
+        let mut tm = Tm::new();
+        tm.set_sec(now.sec);
+        tm.set_nsec(now.nsec);
+        let mut trace = Trace::new();
+        trace.set_arrive_time(tm);
+        msg.mut_header().set_trace(trace);
+
         let mut resp = RaftCmdResponse::new();
         let uuid: Uuid = match util::get_uuid_from_req(&msg) {
             None => {

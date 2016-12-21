@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::vec::Vec;
 use std::default::Default;
 use std::time::{Instant, Duration};
-use time::{Timespec, Duration as TimeDuration};
+use time::{self, Timespec, Duration as TimeDuration};
 
 use rocksdb::{DB, WriteBatch, Writable};
 use protobuf::{self, Message};
@@ -51,6 +51,8 @@ use super::local_metrics::{RaftReadyMetrics, RaftMessageMetrics, RaftProposeMetr
 
 
 const TRANSFER_LEADER_ALLOW_LOG_LAG: u64 = 10;
+
+const TRACC_INFO_OUTPUT_COUNT: u64 = 5000;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug)]
@@ -186,6 +188,25 @@ pub struct ConsistencyState {
     pub hash: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TraceInfo {
+    pub count: u64,
+    pub min: TimeDuration,
+    pub max: TimeDuration,
+    pub avg: TimeDuration,
+}
+
+impl TraceInfo {
+    pub fn new() -> TraceInfo {
+        TraceInfo {
+            count: 0,
+            min: TimeDuration::zero(),
+            max: TimeDuration::zero(),
+            avg: TimeDuration::zero(),
+        }
+    }
+}
+
 pub struct Peer {
     engine: Arc<DB>,
     peer_cache: Rc<RefCell<HashMap<u64, metapb::Peer>>>,
@@ -217,6 +238,8 @@ pub struct Peer {
 
     leader_lease_expired_time: Option<Timespec>,
     election_timeout: TimeDuration,
+
+    trace_info: TraceInfo,
 }
 
 impl Peer {
@@ -312,6 +335,7 @@ impl Peer {
             leader_lease_expired_time: None,
             election_timeout: TimeDuration::milliseconds(cfg.raft_base_tick_interval as i64) *
                               cfg.raft_election_timeout_ticks as i32,
+            trace_info: TraceInfo::new(),
         };
 
         peer.load_all_coprocessors();
@@ -1299,6 +1323,29 @@ impl Peer {
         cmd_resp::bind_uuid(&mut resp, uuid);
         cmd_resp::bind_term(&mut resp, self.term());
         cb.call_box((resp,));
+
+        // record trace
+        {
+            // calculate the time gap
+            let tm = cmd.get_header().get_trace().get_arrive_time();
+            let ts = Timespec::new(tm.get_sec(), tm.get_nsec());
+            let now = time::now().to_timespec();
+            let d = now - ts;
+
+            // update trace info
+            if self.trace_info.count == 0 || d < self.trace_info.min {
+                self.trace_info.min = d
+            }
+            if d > self.trace_info.max {
+                self.trace_info.max = d
+            }
+            let total = self.trace_info.avg * self.trace_info.count as i32 + d;
+            self.trace_info.count += 1;
+            self.trace_info.avg = total / self.trace_info.count as i32;
+            if self.trace_info.count % TRACC_INFO_OUTPUT_COUNT == 0 {
+                info!("{} *** trace info {:?}", self.tag, self.trace_info);
+            }
+        }
 
         exec_result
     }
