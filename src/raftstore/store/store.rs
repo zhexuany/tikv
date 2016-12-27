@@ -1011,23 +1011,24 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         let res = peer.check_epoch(msg, updated_regions);
-        if let Err(Error::StaleEpoch(msg)) = res {
-            // Attach the next region which might be split from the current region. But it doesn't
-            // matter if the next region is not split from the current region. If the region meta
-            // received by the TiKV driver is newer than the meta cached in the driver, the meta is
-            // updated.
-            if let Some((_, &next_region_id)) = self.region_ranges
-                .range(Excluded(&enc_end_key(peer.region())), Unbounded::<&Key>)
-                .next() {
-                let next_peer = &self.region_peers[&next_region_id];
+        if let Err(Error::StaleEpoch(m)) = res {
+            // Attach all regions that overlaps with `key_range` to let TiKV driver update its cache.
+            let key_range = msg.get_header().get_key_range();
+            for (_, region_id) in self.region_ranges
+                .range(Excluded(&keys::data_end_key(key_range.get_min_key())),
+                       Unbounded::<&Key>) {
+                let peer = &self.region_peers[region_id];
+                if peer.region().get_start_key() > key_range.get_max_key() {
+                    break;
+                }
                 let mut updated_region = UpdatedRegion::new();
-                updated_region.set_region(next_peer.region().to_owned());
-                if let Some(p) = next_peer.get_peer_from_cache(peer.leader_id()) {
+                updated_region.set_region(peer.region().to_owned());
+                if let Some(p) = peer.get_peer_from_cache(peer.leader_id()) {
                     updated_region.set_leader(p);
                 }
                 updated_regions.push(updated_region);
             }
-            return Err(Error::StaleEpoch(msg));
+            return Err(Error::StaleEpoch(m));
         }
         res
     }

@@ -942,14 +942,10 @@ impl Peer {
         // should we use not equal here?
         if (check_conf_ver && from_epoch.get_conf_ver() < latest_epoch.get_conf_ver()) ||
            (check_ver && from_epoch.get_version() < latest_epoch.get_version()) {
-            debug!("{} received stale epoch {:?}, mime: {:?}",
+            debug!("{} received stale epoch {:?}, mine: {:?}",
                    self.tag,
                    from_epoch,
                    latest_epoch);
-            let mut updated_region = UpdatedRegion::new();
-            updated_region.set_region(latest_region.clone());
-            updated_region.set_leader(self.peer.clone());
-            updated_regions.push(updated_region);
 
             if req.get_header().has_key_range() {
                 let range = req.get_header().get_key_range();
@@ -958,6 +954,10 @@ impl Peer {
                     debug!("{} accept stale epoch {:?} after check key range",
                            self.tag,
                            from_epoch);
+                    let mut updated_region = UpdatedRegion::new();
+                    updated_region.set_region(latest_region.clone());
+                    updated_region.set_leader(self.peer.clone());
+                    updated_regions.push(updated_region);
                     return Ok(());
                 }
             }
