@@ -126,6 +126,9 @@ wal-recovery-mode = 2
 # rocksdb max total wal size
 # max-total-wal-size = "4GB"
 
+# This specifies the absolute dir path for write-ahead logs (WAL).
+# wal-dir = ""
+
 # Rocksdb Statistics provides cumulative stats over time.
 # Set it ture only when debugging performance, because it will introduce overhead.
 enable-statistics = false

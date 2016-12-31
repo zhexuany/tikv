@@ -210,6 +210,11 @@ fn get_rocksdb_db_option(config: &toml::Value) -> RocksdbOptions {
                                           Some(4 * 1024 * 1024 * 1024));
     opts.set_max_total_wal_size(max_total_wal_size as u64);
 
+    let wal_dir = get_toml_string(config, "rocksdb.wal-dir", Some("".to_owned()));
+    if !wal_dir.is_empty() {
+        opts.set_wal_dir(&wal_dir);
+    }
+
     let max_background_compactions =
         get_toml_int(config, "rocksdb.max-background-compactions", Some(6));
     opts.set_max_background_compactions(max_background_compactions as i32);
