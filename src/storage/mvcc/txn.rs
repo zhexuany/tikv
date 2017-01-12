@@ -152,6 +152,9 @@ impl<'a> MvccTxn<'a> {
     pub fn commit(&mut self, key: &Key, commit_ts: u64) -> Result<()> {
         let (lock_type, short_value) = match try!(self.reader.load_lock(key)) {
             Some(ref mut lock) if lock.ts == self.start_ts => {
+                if key.raw().unwrap() == lock.primary {
+                    info!("commit primary, lock = {:?}", lock);
+                }
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
@@ -180,6 +183,9 @@ impl<'a> MvccTxn<'a> {
     pub fn rollback(&mut self, key: &Key) -> Result<()> {
         match try!(self.reader.load_lock(key)) {
             Some(ref lock) if lock.ts == self.start_ts => {
+                if key.raw().unwrap() == lock.primary {
+                    info!("rollback primary, lock = {:?}", lock);
+                }
                 if lock.short_value.is_none() {
                     self.delete_value(key, lock.ts);
                 }
