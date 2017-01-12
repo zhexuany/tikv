@@ -596,7 +596,7 @@ impl Scheduler {
     fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[cmd.tag(), "new"]).inc();
         let cid = self.gen_id();
-        debug!("received new command, cid={}, cmd={}", cid, cmd);
+        info!("received new command, cid={}, cmd={}", cid, cmd);
         let lock = self.gen_lock(&cmd);
         let ctx = RunningCtx::new(cid, cmd, lock, callback);
         self.insert_ctx(ctx);
@@ -659,7 +659,7 @@ impl Scheduler {
                             cid: u64,
                             cb_ctx: CbContext,
                             snapshot: EngineResult<Box<Snapshot>>) {
-        debug!("receive snapshot finish msg for cid={}", cid);
+        info!("receive snapshot finish msg for cid={}", cid);
         match snapshot {
             Ok(snapshot) => {
                 SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
@@ -679,7 +679,7 @@ impl Scheduler {
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
     fn on_read_finished(&mut self, cid: u64, pr: ProcessResult) {
-        debug!("read command(cid={}) finished", cid);
+        info!("read command(cid={}) finished", cid);
         let mut ctx = self.remove_ctx(cid);
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[ctx.tag, "read_finish"]).inc();
         let cb = ctx.callback.take().unwrap();
@@ -698,7 +698,7 @@ impl Scheduler {
     /// Write prepare failure typically means conflicting transactions are detected. Delivers the
     /// error to the callback, and releases the latches.
     fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
-        debug!("write command(cid={}) failed at prewrite.", cid);
+        info!("write command(cid={}) failed at prewrite.", cid);
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"])
             .inc();
         self.finish_with_err(cid, e);
@@ -728,7 +728,7 @@ impl Scheduler {
     /// Event handler for the success of write.
     fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
         SCHED_STAGE_COUNTER_VEC.with_label_values(&[self.get_ctx_tag(cid), "write_finish"]).inc();
-        debug!("write finished for command, cid={}", cid);
+        info!("write finished for command, cid={}", cid);
         let mut ctx = self.remove_ctx(cid);
         let cb = ctx.callback.take().unwrap();
         let pr = match result {
