@@ -19,6 +19,7 @@ use super::lock::{LockType, Lock};
 use super::write::{WriteType, Write};
 use super::{Error, Result};
 use super::metrics::*;
+use util;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -134,6 +135,12 @@ impl<'a> MvccTxn<'a> {
             None
         };
 
+        if key.raw().unwrap() == primary {
+            info!("prewrite primary, key:{:?}, ts:{}",
+                  util::escape(primary),
+                  self.start_ts);
+        }
+
         self.lock_key(key.clone(),
                       LockType::from_mutation(&mutation),
                       primary.to_vec(),
@@ -153,7 +160,9 @@ impl<'a> MvccTxn<'a> {
         let (lock_type, short_value) = match try!(self.reader.load_lock(key)) {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 if key.raw().unwrap() == lock.primary {
-                    info!("commit primary, lock = {:?}", lock);
+                    info!("commit primary, key:{:?}, ts:{}",
+                          util::escape(&lock.primary),
+                          lock.ts);
                 }
                 (lock.lock_type, lock.short_value.take())
             }
@@ -184,7 +193,9 @@ impl<'a> MvccTxn<'a> {
         match try!(self.reader.load_lock(key)) {
             Some(ref lock) if lock.ts == self.start_ts => {
                 if key.raw().unwrap() == lock.primary {
-                    info!("rollback primary, lock = {:?}", lock);
+                    info!("rollback primary, key:{:?}, ts:{}",
+                          util::escape(&lock.primary),
+                          lock.ts);
                 }
                 if lock.short_value.is_none() {
                     self.delete_value(key, lock.ts);
