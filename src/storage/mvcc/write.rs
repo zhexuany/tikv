@@ -82,7 +82,7 @@ impl Write {
         b.encode_var_u64(self.start_ts).unwrap();
         if let Some(ref v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
-            b.push(v.len() as u8);
+            b.encode_u64_desc(v.len() as u64).unwrap();
             b.extend_from_slice(v);
         }
         b
@@ -97,7 +97,7 @@ impl Write {
         let short_value = if b.len() > 0 {
             let flag = try!(b.read_u8());
             if flag == SHORT_VALUE_PREFIX {
-                let len = try!(b.read_u8());
+                let len = try!(b.decode_u64_desc());
                 if len as usize != b.len() {
                     panic!("short value len [{}] not equal to content len [{}]",
                            len,

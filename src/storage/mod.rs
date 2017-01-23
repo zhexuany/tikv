@@ -48,7 +48,7 @@ pub const LARGE_CFS: &'static [CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &'static [CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 
 // Short value max len must <= 255.
-pub const SHORT_VALUE_MAX_LEN: usize = 64;
+pub const SHORT_VALUE_MAX_LEN: usize = 65535;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
 pub fn is_short_value(value: &[u8]) -> bool {
