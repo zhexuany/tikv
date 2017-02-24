@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::{HistogramVec, CounterVec, GaugeVec, exponential_buckets};
+use prometheus::{HistogramVec, CounterVec, GaugeVec};
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec =
@@ -56,19 +56,17 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref COPR_SCAN_KEYS: HistogramVec =
-        register_histogram_vec!(
-            "tikv_coprocessor_scan_keys",
-            "Bucketed histogram of coprocessor per request scan keys",
-            &["type", "req"],
-            exponential_buckets(1.0, 2.0, 20).unwrap()
+    pub static ref COPR_SCANNED_KEYS: CounterVec =
+        register_counter_vec!(
+            "tikv_coprocessor_scanned_keys",
+            "Total number of coprocessor request scanned keys",
+            &["type", "req"]
         ).unwrap();
 
-    pub static ref COPR_SCAN_EFFICIENCY: HistogramVec =
-        register_histogram_vec!(
-            "tikv_coprocessor_scan_efficiency",
-            "Bucketed histogram of coprocessor scan efficiency",
-            &["type", "req"],
-            vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    pub static ref COPR_SCAN_SKIPPED_KEYS: CounterVec =
+        register_counter_vec!(
+            "tikv_coprocessor_scan_skipped_keys",
+            "Total number of coprocessor request scan skipped keys",
+            &["type", "req"]
         ).unwrap();
 }

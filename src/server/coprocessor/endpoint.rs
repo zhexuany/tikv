@@ -156,9 +156,11 @@ impl RequestTask {
             .observe(handle_time - wait_time);
 
         let scanned_keys = self.scan_metrics.scanned_keys as f64;
-        COPR_SCAN_KEYS.with_label_values(&["select", type_str]).observe(scanned_keys);
-        let efficiency = self.scan_metrics.efficiency();
-        COPR_SCAN_EFFICIENCY.with_label_values(&["select", type_str]).observe(efficiency);
+        let skipped_keys = self.scan_metrics.skipped_keys as f64;
+        COPR_SCANNED_KEYS.with_label_values(&["select", type_str]).inc_by(scanned_keys).unwrap();
+        COPR_SCAN_SKIPPED_KEYS.with_label_values(&["select", type_str])
+            .inc_by(skipped_keys)
+            .unwrap();
 
         if handle_time > SLOW_QUERY_LOWER_BOUND {
             info!("[region {}] handle {:?} [{}] takes {:?} [waiting: {:?}, keys: {}, hit: {}, \
@@ -169,7 +171,7 @@ impl RequestTask {
                   handle_time,
                   wait_time,
                   self.scan_metrics.scanned_keys,
-                  efficiency,
+                  self.scan_metrics.efficiency(),
                   self.req.get_ranges().len(),
                   self.req.get_ranges().get(0));
         }
