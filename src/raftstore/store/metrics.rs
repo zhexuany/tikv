@@ -143,4 +143,12 @@ lazy_static! {
             "tikv_raftstore_gc_raft_log_total",
             "Total number of GC raft log."
         ).unwrap();
+
+    pub static ref RAFT_READY_ENTRIES_LEN: Histogram =
+        register_histogram!(
+            "tikv_raft_ready_entries_len",
+            "Bucketed histogram of raft ready entries len",
+            vec![2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0,
+                    512.0, 1024.0, 5120.0, 10240.0]
+        ).unwrap();
 }

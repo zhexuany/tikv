@@ -670,6 +670,7 @@ impl Peer {
         debug!("{} handle raft ready", self.tag);
 
         let mut ready = self.raft_group.ready_since(self.last_ready_idx);
+        RAFT_READY_ENTRIES_LEN.observe(ready.entries.len() as f64);
 
         self.on_role_changed(&ready, worker);
 
