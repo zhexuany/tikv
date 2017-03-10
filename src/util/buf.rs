@@ -20,6 +20,7 @@ use bytes::{ByteBuf, MutByteBuf, alloc};
 pub use mio::{TryRead, TryWrite};
 
 use util::escape;
+use super::metrics::*;
 
 // `create_mem_buf` creates the buffer with fixed capacity s.
 pub fn create_mem_buf(s: usize) -> MutByteBuf {
@@ -128,6 +129,8 @@ impl PipeBuffer {
         let cap = self.buf.cap();
         self.buf.reserve(cap, capacity + 1 - cap);
         let new_cap = self.buf.cap();
+
+        PIPBUF_ENSURE_SIZE_HISTOGRAM.observe(new_cap as f64);
 
         // After the buf being extended, we have to make the written data layout correctly.
         unsafe {

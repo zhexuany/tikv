@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use prometheus::CounterVec;
+use prometheus::{CounterVec, Histogram, exponential_buckets};
 
 lazy_static! {
     pub static ref CHANNEL_FULL_COUNTER_VEC: CounterVec =
@@ -19,5 +19,12 @@ lazy_static! {
             "tikv_channel_full_total",
             "Total number of channel full errors.",
             &["type"]
+        ).unwrap();
+
+    pub static ref PIPBUF_ENSURE_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_pipbuf_ensure_size",
+            "Histogram of ensure size for each pip buffer",
+            exponential_buckets(1024.0, 2.0, 20).unwrap()
         ).unwrap();
 }
