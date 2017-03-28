@@ -635,17 +635,16 @@ impl Peer {
             return true;
         }
 
-        if self.is_appending_log {
-            debug!("region [{}] is async appending log, will handled next time",
-                   self.region_id);
-            return false;
-        }
-
-        self.is_appending_log = true;
-
         if !self.raft_group.has_ready_since(Some(self.last_ready_idx)) {
             return true;
         }
+
+        if self.is_appending_log {
+            debug!("region [{}] is async appending log, will handled next time",
+            self.region_id);
+            return false;
+        }
+        self.is_appending_log = true;
 
         debug!("{} handle raft ready", self.tag);
 
