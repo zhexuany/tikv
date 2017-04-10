@@ -24,6 +24,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::coprocessor::Response;
 mod conn;
 mod metrics;
+mod tikv_grpc;
 
 pub mod config;
 pub mod errors;
