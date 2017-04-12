@@ -12,23 +12,31 @@
 // limitations under the License.
 
 use std::io::Write;
+use std::fmt;
+use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::net::SocketAddr;
 
 use futures::{future, Future, Stream};
+use futures::sync::mpsc;
+use tokio_core::reactor::Handle;
 use grpc::futures_grpc::{GrpcStreamSend, GrpcFutureSend};
 use grpc::error::GrpcError;
 use mio::Token;
 
 use kvproto::raft_serverpb::*;
-use kvproto::raft_serverpb_grpc;
+use kvproto::raft_serverpb_grpc::{RaftAsync, RaftAsyncClient};
 
 use util::HandyRwLock;
 use util::worker::Scheduler;
+use util::transport::SendCh;
 use util::buf::PipeBuffer;
+use util::worker::FutureRunnable;
 use super::server::ServerChannel;
 use super::transport::RaftStoreRouter;
 use super::snap::Task as SnapTask;
+use super::errors::Result;
 
 // RaftServer is used for receiving raft messages from other stores.
 #[allow(dead_code)]
@@ -49,7 +57,7 @@ impl<T: RaftStoreRouter + 'static> RaftServer<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> raft_serverpb_grpc::RaftAsync for RaftServer<T> {
+impl<T: RaftStoreRouter + 'static> RaftAsync for RaftServer<T> {
     fn Raft(&self, s: GrpcStreamSend<RaftMessage>) -> GrpcFutureSend<Done> {
         let ch = self.ch.raft_router.clone();
         s.for_each(move |msg| {
@@ -89,5 +97,75 @@ impl<T: RaftStoreRouter + 'static> raft_serverpb_grpc::RaftAsync for RaftServer<
             })
             .and_then(|_| future::ok::<_, GrpcError>(Done::new()))
             .boxed()
+    }
+}
+
+// SendTask delivers a raft message to other store.
+pub struct SendTask {
+    pub addr: SocketAddr,
+    pub msg: RaftMessage,
+}
+
+impl fmt::Display for SendTask {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "send raft message to {:?}", self.addr)
+    }
+}
+
+struct Conn {
+    _client: RaftAsyncClient,
+    stream: mpsc::UnboundedSender<RaftMessage>,
+}
+
+impl Conn {
+    fn new(addr: SocketAddr, handle: &Handle) -> Result<Conn> {
+        let host = format!("{}", addr.ip());
+        let client = box_try!(RaftAsyncClient::new(&*host, addr.port(), false, Default::default()));
+        let (tx, rx) = mpsc::unbounded();
+        handle.spawn(client.Raft(box rx.map_err(|_| GrpcError::Other("canceled")))
+            .then(|_| future::ok(())));
+        Ok(Conn {
+            _client: client,
+            stream: tx,
+        })
+    }
+}
+
+// SendRunner is used for sending raft messages to other stores.
+pub struct SendRunner {
+    ch: SendCh<SendTask>,
+    snap_scheduler: Scheduler<SnapTask>,
+    conns: HashMap<SocketAddr, Conn>,
+}
+
+impl SendRunner {
+    pub fn new(ch: SendCh<SendTask>, snap_scheduler: Scheduler<SnapTask>) -> SendRunner {
+        SendRunner {
+            ch: ch,
+            snap_scheduler: snap_scheduler,
+            conns: HashMap::new(),
+        }
+    }
+
+    fn get_conn(&mut self, addr: SocketAddr, handle: &Handle) -> Result<&Conn> {
+        // TDOO: handle Conn::new() error.
+        let conn = self.conns.entry(addr).or_insert_with(|| Conn::new(addr, handle).unwrap());
+        Ok(conn)
+    }
+
+    fn send(&mut self, t: SendTask, handle: &Handle) -> Result<()> {
+        let conn = try!(self.get_conn(t.addr, handle));
+        box_try!(conn.stream.send(t.msg));
+        Ok(())
+    }
+}
+
+impl FutureRunnable<SendTask> for SendRunner {
+    fn run(&mut self, t: SendTask, handle: &Handle) {
+        let addr = t.addr;
+        if let Err(e) = self.send(t, handle) {
+            error!("send raft message error: {:?}", e);
+            self.conns.remove(&addr);
+        }
     }
 }
