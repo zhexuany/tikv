@@ -25,6 +25,7 @@ use kvproto::coprocessor::Response;
 mod conn;
 mod metrics;
 mod tikv_grpc;
+mod raft_grpc;
 
 pub mod config;
 pub mod errors;
