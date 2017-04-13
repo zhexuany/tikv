@@ -13,15 +13,21 @@
 
 use std::fmt::{self, Formatter, Display};
 use std::io;
-use std::net::{SocketAddr, TcpStream};
 use std::io::Read;
+use std::error::Error;
+use std::net::{SocketAddr, TcpStream};
 use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
 use std::time::{Instant, Duration};
+use std::iter;
 
 use threadpool::ThreadPool;
 use mio::Token;
+use grpc::error::GrpcError;
+use kvproto::raft_serverpb::SnapshotChunk;
 use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb_grpc::RaftClient;
+use kvproto::raft_serverpb_grpc::Raft;
 
 use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
@@ -82,8 +88,10 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
 
     let send_timer = SEND_SNAP_HISTOGRAM.start_timer();
 
-    let snap = data.msg.get_message().get_snapshot();
-    let key = try!(SnapKey::from_snap(&snap));
+    let key = {
+        let snap = data.msg.get_message().get_snapshot();
+        try!(SnapKey::from_snap(&snap))
+    };
     mgr.register(key.clone(), SnapEntry::Sending);
     let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
@@ -92,25 +100,36 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
+    let total_size = try!(s.total_size());
     // snapshot file has been validated when created, so no need to validate again.
 
-    let mut conn = try!(TcpStream::connect(&addr));
-    try!(conn.set_nodelay(true));
-    try!(conn.set_read_timeout(Some(Duration::from_secs(DEFAULT_READ_TIMEOUT))));
-    try!(conn.set_write_timeout(Some(Duration::from_secs(DEFAULT_WRITE_TIMEOUT))));
-
-    let res = rpc::encode_msg(&mut conn, data.msg_id, &data.msg)
-        .and_then(|_| io::copy(&mut s, &mut conn).map_err(From::from))
-        .and_then(|_| conn.read(&mut [0]).map_err(From::from))
+    let host = format!("{}", addr.ip());
+    let res = RaftClient::new(&*host, addr.port(), false, Default::default())
+        .and_then(move |client| {
+            client.Snapshot(box iter::once({
+                    let mut first = SnapshotChunk::new();
+                    first.set_message(data.msg);
+                    Ok(first)
+                })
+                .chain(s.map(|item| {
+                        item.map(|buf| {
+                                let mut chunk = SnapshotChunk::new();
+                                chunk.set_data(buf);
+                                chunk
+                            })
+                            .map_err(|_| GrpcError::Other(".."))
+                    })
+                    .into_iter()))
+        })
         .map(|_| ())
         .map_err(From::from);
-    let size = try!(s.total_size());
+
     info!("[region {}] sent snapshot {} [size: {}, dur: {:?}]",
           key.region_id,
           key,
-          size,
+          total_size,
           timer.elapsed());
-    s.delete();
+    // s.delete(); // TODO: Fix it.
     send_timer.observe_duration();
     res
 }

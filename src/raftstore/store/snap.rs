@@ -56,6 +56,11 @@ quick_error! {
             description("abort")
             display("abort")
         }
+        Io(err: io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Other(err: Box<error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -1636,6 +1641,32 @@ mod v2 {
 
             s2.build(&snapshot, &region, &mut snap_data, &mut stat).unwrap();
             assert!(s2.exists());
+        }
+    }
+}
+
+
+const SNAP_CHUNK_LEN: usize = 1024 * 1024;
+
+impl Iterator for Snapshot {
+    type Item = Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = Vec::with_capacity(SNAP_CHUNK_LEN);
+        let mut written = 0;
+        loop {
+            let len = match self.read(&mut buf[written..]) {
+                Ok(0) => return None,
+                Ok(len) => len,
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    return Some(Err(Error::from(e)));
+                }
+            };
+            written += len;
+            if written >= SNAP_CHUNK_LEN {
+                return Some(Ok(buf));
+            }
         }
     }
 }
