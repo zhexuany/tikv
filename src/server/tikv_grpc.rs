@@ -13,6 +13,7 @@
 
 use std::boxed::FnBox;
 use std::fmt::Debug;
+use std::sync::Mutex;
 use grpc::futures_grpc::GrpcFutureSend;
 use grpc::error::GrpcError;
 use futures::Future;
@@ -34,8 +35,8 @@ const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
 #[allow(dead_code)]
 pub struct TiKVAsync {
-    storage: Storage,
-    end_point_worker: Worker<EndPointTask>,
+    storage: Mutex<Storage>,
+    end_point_worker: Mutex<Worker<EndPointTask>>,
     end_point_concurrency: usize,
 }
 
@@ -43,22 +44,22 @@ pub struct TiKVAsync {
 impl TiKVAsync {
     pub fn new(storage: Storage, end_point_concurrency: usize) -> TiKVAsync {
         TiKVAsync {
-            storage: storage,
-            end_point_worker: Worker::new("end-point-worker"),
+            storage: Mutex::new(storage),
+            end_point_worker: Mutex::new(Worker::new("end-point-worker")),
             end_point_concurrency: end_point_concurrency,
         }
     }
 
     pub fn run(&mut self) -> Result<()> {
-        let end_point = EndPointHost::new(self.storage.get_engine(),
-                                          self.end_point_worker.scheduler(),
+        let end_point = EndPointHost::new(self.storage.lock().unwrap().get_engine(),
+                                          self.end_point_worker.lock().unwrap().scheduler(),
                                           self.end_point_concurrency);
-        try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
+        try!(self.end_point_worker.lock().unwrap().start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         Ok(())
     }
 
     pub fn stop(&mut self) {
-        self.end_point_worker.stop();
+        self.end_point_worker.lock().unwrap().stop();
     }
 }
 
@@ -75,7 +76,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
     fn KvGet(&self, mut p: GetRequest) -> GrpcFutureSend<GetResponse> {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
         let (cb, future) = make_callback();
-        self.storage
+        self.storage.lock().unwrap()
             .async_get(p.take_context(),
                        Key::from_raw(p.get_key()),
                        p.get_version(),
@@ -103,7 +104,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         options.key_only = p.get_key_only();
 
         let (cb, future) = make_callback();
-        self.storage
+        self.storage.lock().unwrap()
             .async_scan(p.take_context(),
                         Key::from_raw(p.get_start_key()),
                         p.get_limit() as usize,
@@ -140,7 +141,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         options.skip_constraint_check = p.get_skip_constraint_check();
 
         let (cb, future) = make_callback();
-        self.storage
+        self.storage.lock().unwrap()
             .async_prewrite(p.take_context(),
                             mutations,
                             p.take_primary_lock(),
@@ -165,7 +166,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         let keys = p.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
         let (cb, future) = make_callback();
-        self.storage
+        self.storage.lock().unwrap()
             .async_commit(p.take_context(),
                           keys,
                           p.get_start_version(),
@@ -188,7 +189,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage
+        self.storage.lock().unwrap()
             .async_cleanup(p.take_context(),
                            Key::from_raw(p.get_key()),
                            p.get_start_version(),
@@ -215,7 +216,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         let keys = p.get_keys().into_iter().map(|x| Key::from_raw(x)).collect();
 
         let (cb, future) = make_callback();
-        self.storage
+        self.storage.lock().unwrap()
             .async_batch_get(p.take_context(), keys, p.get_version(), cb)
             .unwrap();
         future.map(|v| {
@@ -237,7 +238,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         let keys = p.get_keys().into_iter().map(|x| Key::from_raw(x)).collect();
 
         let (cb, future) = make_callback();
-        self.storage.async_rollback(p.take_context(), keys, p.get_start_version(), cb).unwrap();
+        self.storage.lock().unwrap().async_rollback(p.take_context(), keys, p.get_start_version(), cb).unwrap();
         future.map(|v| {
                 let mut resp = BatchRollbackResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -254,7 +255,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.async_scan_lock(p.take_context(), p.get_max_version(), cb).unwrap();
+        self.storage.lock().unwrap().async_scan_lock(p.take_context(), p.get_max_version(), cb).unwrap();
         future.map(|v| {
                 let mut resp = ScanLockResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -278,7 +279,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         };
 
         let (cb, future) = make_callback();
-        self.storage
+        self.storage.lock().unwrap()
             .async_resolve_lock(p.take_context(), p.get_start_version(), commit_ts, cb)
             .unwrap();
         future.map(|v| {
@@ -297,7 +298,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.async_gc(p.take_context(), p.get_safe_point(), cb).unwrap();
+        self.storage.lock().unwrap().async_gc(p.take_context(), p.get_safe_point(), cb).unwrap();
         future.map(|v| {
                 let mut resp = GCResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -314,7 +315,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.async_raw_get(p.take_context(), p.take_key(), cb).unwrap();
+        self.storage.lock().unwrap().async_raw_get(p.take_context(), p.take_key(), cb).unwrap();
         future.map(|v| {
                 let mut resp = RawGetResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -335,7 +336,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.async_raw_put(p.take_context(), p.take_key(), p.take_value(), cb).unwrap();
+        self.storage.lock().unwrap().async_raw_put(p.take_context(), p.take_key(), p.take_value(), cb).unwrap();
         future.map(|v| {
                 let mut resp = RawPutResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -352,7 +353,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
 
         let (cb, future) = make_callback();
-        self.storage.async_raw_delete(p.take_context(), p.take_key(), cb).unwrap();
+        self.storage.lock().unwrap().async_raw_delete(p.take_context(), p.take_key(), cb).unwrap();
         future.map(|v| {
                 let mut resp = RawDeleteResponse::new();
                 if let Some(err) = extract_region_error(&v) {
@@ -369,7 +370,7 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
         RECV_MSG_COUNTER.with_label_values(&["coprocessor"]).inc();
 
         let (cb, future) = make_callback();
-        self.end_point_worker.schedule(EndPointTask::Request(RequestTask::new(p, cb))).unwrap();
+        self.end_point_worker.lock().unwrap().schedule(EndPointTask::Request(RequestTask::new(p, cb))).unwrap();
         future.boxed()
     }
 }

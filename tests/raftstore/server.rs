@@ -129,23 +129,6 @@ impl Simulator for ServerCluster {
             cfg.addr = format!("{}", addr)
         }
 
-        let listener;
-        let mut try_cnt = 0;
-        loop {
-            match bind(&cfg.addr) {
-                Err(server::Error::Io(ref e)) if e.kind() == ErrorKind::AddrInUse &&
-                                                 try_cnt < 100 => sleep_ms(10),
-                Ok(l) => {
-                    listener = l;
-                    break;
-                }
-                Err(e) => panic!("unexpected error: {:?}", e),
-            }
-            try_cnt += 1;
-        }
-        let addr = listener.local_addr().unwrap();
-        cfg.addr = format!("{}", addr);
-
         // TODO: simplify creating raft server later.
         let mut event_loop = create_event_loop(&cfg).unwrap();
         let sendch = SendCh::new(event_loop.channel(), "cluster-simulator");
@@ -186,7 +169,6 @@ impl Simulator for ServerCluster {
         };
         let mut server = Server::new(&mut event_loop,
                                      &cfg,
-                                     listener,
                                      store,
                                      server_chan,
                                      resolver,
@@ -194,6 +176,7 @@ impl Simulator for ServerCluster {
             .unwrap();
 
         let ch = server.get_sendch();
+        let addr = server.listening_addr().unwrap();
 
         let t = Builder::new()
             .name(thd_name!(format!("server-{}", node_id)))

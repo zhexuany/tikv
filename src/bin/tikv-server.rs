@@ -817,16 +817,12 @@ fn run_raft_server(pd_client: RpcClient,
         panic!("failed to start storage, error = {:?}", e);
     }
 
-    info!("Start listening on {}...", cfg.addr);
-    let listener = bind(&cfg.addr).unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
-
     let server_chan = ServerChannel {
         raft_router: raft_router,
         snapshot_status_sender: node.get_snapshot_status_sender(),
     };
     let svr = Server::new(&mut event_loop,
                           &cfg,
-                          listener,
                           store,
                           server_chan,
                           resolver,

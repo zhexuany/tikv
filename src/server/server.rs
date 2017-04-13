@@ -99,7 +99,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // Node and then pass it here.
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
-               _: TcpListener,
                storage: Storage,
                ch: ServerChannel<T>,
                resolver: S,
@@ -114,7 +113,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         conf.http.no_delay = Some(true);
         conf.http.thread_name = Some("raft-grpc".to_owned());
         conf.http.reuse_port = Some(true);
-        let raft_server = RaftAsyncServer::new(cfg.addr, conf, h);
+        let raft_server = RaftAsyncServer::new(cfg.addr.to_owned(), conf, h);
 
         let addr = raft_server.local_addr().to_owned();
 
