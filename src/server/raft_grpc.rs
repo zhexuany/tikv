@@ -14,7 +14,7 @@
 use std::io::Write;
 use std::fmt;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::net::SocketAddr;
 
@@ -28,7 +28,6 @@ use mio::Token;
 use kvproto::raft_serverpb::*;
 use kvproto::raft_serverpb_grpc::{RaftAsync, RaftAsyncClient};
 
-use util::HandyRwLock;
 use util::worker::Scheduler;
 use util::transport::SendCh;
 use util::buf::PipeBuffer;
@@ -41,17 +40,17 @@ use super::errors::Result;
 // RaftServer is used for receiving raft messages from other stores.
 #[allow(dead_code)]
 pub struct RaftServer<T: RaftStoreRouter + 'static> {
-    ch: ServerChannel<T>,
-    snap_scheduler: RwLock<Scheduler<SnapTask>>,
+    ch: Mutex<T>,
+    snap_scheduler: Mutex<Scheduler<SnapTask>>,
     token: AtomicUsize, // TODO: remove it.
 }
 
 #[allow(dead_code)]
 impl<T: RaftStoreRouter + 'static> RaftServer<T> {
-    pub fn new(ch: ServerChannel<T>, snap_scheduler: Scheduler<SnapTask>) -> RaftServer<T> {
+    pub fn new(ch: T, snap_scheduler: Scheduler<SnapTask>) -> RaftServer<T> {
         RaftServer {
-            ch: ch,
-            snap_scheduler: RwLock::new(snap_scheduler),
+            ch: Mutex::new(ch),
+            snap_scheduler: Mutex::new(snap_scheduler),
             token: AtomicUsize::new(1),
         }
     }
@@ -59,7 +58,7 @@ impl<T: RaftStoreRouter + 'static> RaftServer<T> {
 
 impl<T: RaftStoreRouter + 'static> RaftAsync for RaftServer<T> {
     fn Raft(&self, s: GrpcStreamSend<RaftMessage>) -> GrpcFutureSend<Done> {
-        let ch = self.ch.raft_router.clone();
+        let ch = self.ch.lock().unwrap().clone();
         s.for_each(move |msg| {
                 ch.send_raft_msg(msg).map_err(|_| GrpcError::Other("send raft msg fail"))
             })
@@ -69,7 +68,7 @@ impl<T: RaftStoreRouter + 'static> RaftAsync for RaftServer<T> {
 
     fn Snapshot(&self, s: GrpcStreamSend<SnapshotChunk>) -> GrpcFutureSend<Done> {
         let token = Token(self.token.fetch_add(1, Ordering::SeqCst));
-        let sched = self.snap_scheduler.rl().clone();
+        let sched = self.snap_scheduler.lock().unwrap().clone();
         let sched2 = sched.clone();
         s.for_each(move |mut chunk| {
                 if chunk.has_message() {
@@ -133,15 +132,13 @@ impl Conn {
 
 // SendRunner is used for sending raft messages to other stores.
 pub struct SendRunner {
-    ch: SendCh<SendTask>,
     snap_scheduler: Scheduler<SnapTask>,
     conns: HashMap<SocketAddr, Conn>,
 }
 
 impl SendRunner {
-    pub fn new(ch: SendCh<SendTask>, snap_scheduler: Scheduler<SnapTask>) -> SendRunner {
+    pub fn new(snap_scheduler: Scheduler<SnapTask>) -> SendRunner {
         SendRunner {
-            ch: ch,
             snap_scheduler: snap_scheduler,
             conns: HashMap::new(),
         }

@@ -56,6 +56,10 @@ impl TiKVAsync {
         try!(self.end_point_worker.start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         Ok(())
     }
+
+    pub fn stop(&mut self) {
+        self.end_point_worker.stop();
+    }
 }
 
 fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, GrpcFutureSend<T>) {

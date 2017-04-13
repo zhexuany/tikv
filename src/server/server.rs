@@ -18,8 +18,12 @@ use std::net::SocketAddr;
 
 use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
 use mio::tcp::{TcpListener, TcpStream};
+use grpc::server::GrpcServerConf;
+use kvproto::raft_serverpb_grpc::*;
+use kvproto::tikvpb_grpc::*;
 
 use util::worker::{Stopped, Worker};
+use util::worker::FutureWorker;
 use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
@@ -29,6 +33,8 @@ use util::{HashMap, HashSet};
 
 use super::{Msg, ConnData};
 use super::{Result, Config};
+use super::tikv_grpc::TiKVAsync;
+use super::raft_grpc::{RaftServer, SendTask, SendRunner};
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
@@ -63,6 +69,11 @@ pub struct ServerChannel<T: RaftStoreRouter + 'static> {
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     sendch: SendCh<Msg>,
 
+    raft_server: Option<RaftAsyncServer>,
+    kv_server: Option<TiKVAsyncServer>,
+
+    local_addr: SocketAddr,
+
     // store id -> addr
     // This is for communicating with other raft stores.
     store_addrs: HashMap<u64, SocketAddr>,
@@ -72,6 +83,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
 
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
+
+    raft_msg_worker: FutureWorker<SendTask>,
 
     resolver: S,
 
@@ -86,27 +99,43 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // Node and then pass it here.
     pub fn new(event_loop: &mut EventLoop<Self>,
                cfg: &Config,
-               listener: TcpListener,
-               _: Storage,
+               _: TcpListener,
+               storage: Storage,
                ch: ServerChannel<T>,
                resolver: S,
                snap_mgr: SnapManager)
                -> Result<Server<T, S>> {
-        try!(event_loop.register(&listener,
-                                 SERVER_TOKEN,
-                                 EventSet::readable(),
-                                 PollOpt::edge()));
-
         let sendch = SendCh::new(event_loop.channel(), "raft-server");
         let snap_worker = Worker::new("snap-handler");
+        let raft_msg_worker = FutureWorker::new("raftmessage-worker");
+
+        let h = RaftServer::new(ch.raft_router.clone(), snap_worker.scheduler());
+        let mut conf = GrpcServerConf::default();
+        conf.http.no_delay = Some(true);
+        conf.http.thread_name = Some("raft-grpc".to_owned());
+        conf.http.reuse_port = Some(true);
+        let raft_server = RaftAsyncServer::new(cfg.addr, conf, h);
+
+        let addr = raft_server.local_addr().to_owned();
+
+        let h = TiKVAsync::new(storage, cfg.end_point_concurrency);
+        let mut conf = GrpcServerConf::default();
+        conf.http.no_delay = Some(true);
+        conf.http.thread_name = Some("kv-grpc".to_owned());
+        conf.http.reuse_port = Some(true);
+        let kv_server = TiKVAsyncServer::new(addr, conf, h);
 
         let svr = Server {
             sendch: sendch,
+            raft_server: Some(raft_server),
+            kv_server: Some(kv_server),
+            local_addr: addr,
             store_addrs: HashMap::default(),
             store_resolving: HashSet::default(),
             ch: ch,
             snap_mgr: snap_mgr,
             snap_worker: snap_worker,
+            raft_msg_worker: raft_msg_worker,
             resolver: resolver,
             cfg: cfg.clone(),
         };
@@ -118,6 +147,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
+
+        let raft_msg_runner = SendRunner::new(self.snap_worker.scheduler());
+        box_try!(self.raft_msg_worker.start(raft_msg_runner));
 
         info!("TiKV is ready to serve");
 
@@ -133,22 +165,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     // to get the real address because we may use "127.0.0.1:0"
     // in test to avoid port conflict.
     pub fn listening_addr(&self) -> Result<SocketAddr> {
-        panic!("");
+        Ok(self.local_addr)
     }
 
     fn write_data(&mut self, addr: SocketAddr, data: ConnData) {
-//        let res = match self.conns.get_mut(&token) {
-//            None => {
-//                debug!("missing conn for token {:?}", token);
-//                return;
-//            }
-//            Some(conn) => conn.append_write_buf(event_loop, data),
-//        };
-//
-//        if let Err(e) = res {
-//            debug!("handle write data err {:?}, remove", e);
-//            self.remove_conn(event_loop, token);
-//        }
+        if let Err(e) = self.raft_msg_worker.schedule(SendTask{
+            addr: addr,
+            msg: data.msg,
+        }) {
+            error!("send raft msg err {:?}", e);
+        }
     }
 
     fn resolve_store(&mut self, store_id: u64, data: ConnData) {
@@ -208,10 +234,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         self.resolve_store(store_id, data);
     }
 
-    fn on_resolve_result(&mut self,
-                         store_id: u64,
-                         sock_addr: Result<SocketAddr>,
-                         data: ConnData) {
+    fn on_resolve_result(&mut self, store_id: u64, sock_addr: Result<SocketAddr>, data: ConnData) {
         if !data.is_snapshot() {
             // clear resolving.
             self.store_resolving.remove(&store_id);
@@ -281,7 +304,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
             Msg::ResolveResult { store_id, sock_addr, data } => {
                 self.on_resolve_result(store_id, sock_addr, data)
             }
-            Msg::CloseConn { .. } => {},
+            Msg::CloseConn { .. } => {}
         }
     }
 
@@ -297,6 +320,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         // TODO: handle quit server if event_loop is_running() returns false.
         if !el.is_running() {
             self.snap_worker.stop();
+            self.raft_msg_worker.stop();
+            self.raft_server.take();
+            self.kv_server.take();
         }
     }
 }
