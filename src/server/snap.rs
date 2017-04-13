@@ -12,13 +12,10 @@
 // limitations under the License.
 
 use std::fmt::{self, Formatter, Display};
-use std::io;
-use std::io::Read;
-use std::error::Error;
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
-use std::time::{Instant, Duration};
+use std::time::Instant;
 use std::iter;
 
 use threadpool::ThreadPool;
@@ -31,7 +28,6 @@ use kvproto::raft_serverpb_grpc::Raft;
 
 use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
-use util::codec::rpc;
 use util::buf::PipeBuffer;
 use util::HashMap;
 use util::transport::SendCh;
@@ -43,8 +39,6 @@ use super::transport::RaftStoreRouter;
 pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_SENDER_POOL_SIZE: usize = 3;
-const DEFAULT_READ_TIMEOUT: u64 = 30;
-const DEFAULT_WRITE_TIMEOUT: u64 = 30;
 
 /// `Task` that `Runner` can handle.
 ///
@@ -93,7 +87,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
         try!(SnapKey::from_snap(&snap))
     };
     mgr.register(key.clone(), SnapEntry::Sending);
-    let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
+    let s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
         mgr.deregister(&key, &SnapEntry::Sending);
     });

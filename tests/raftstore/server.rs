@@ -17,14 +17,13 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::time::Duration;
-use std::io::ErrorKind;
 use std::boxed::FnBox;
 
 use rocksdb::DB;
 use tempdir::TempDir;
 
 use super::cluster::{Simulator, Cluster};
-use tikv::server::{self, ServerChannel, Server, ServerTransport, create_event_loop, Msg, bind};
+use tikv::server::{ServerChannel, Server, ServerTransport, create_event_loop, Msg};
 use tikv::server::{Node, Config, create_raft_storage, PdStoreAddrResolver};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::RaftStoreRouter;
@@ -38,7 +37,6 @@ use kvproto::raft_serverpb::{self, RaftMessage};
 use kvproto::raft_cmdpb::*;
 
 use super::pd::TestPdClient;
-use super::util::sleep_ms;
 use super::transport_simulate::*;
 
 type SimulateServerTransport = SimulateTransport<RaftMessage, ServerTransport>;

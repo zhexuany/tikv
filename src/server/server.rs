@@ -16,8 +16,8 @@ use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
 
-use mio::{Token, Handler, EventLoop, EventLoopConfig, EventSet, PollOpt};
-use mio::tcp::{TcpListener, TcpStream};
+use mio::{Handler, EventLoop, EventLoopConfig};
+use mio::tcp::TcpListener;
 use grpc::server::GrpcServerConf;
 use kvproto::raft_serverpb_grpc::*;
 use kvproto::tikvpb_grpc::*;
@@ -28,7 +28,6 @@ use util::transport::SendCh;
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use raft::SnapshotStatus;
-use util::sockopt::SocketOpt;
 use util::{HashMap, HashSet};
 
 use super::{Msg, ConnData};
@@ -39,9 +38,6 @@ use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
 use super::metrics::*;
-
-const SERVER_TOKEN: Token = Token(1);
-const FIRST_CUSTOM_TOKEN: Token = Token(1024);
 
 pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>>>
     where T: RaftStoreRouter,
@@ -87,8 +83,6 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     raft_msg_worker: FutureWorker<SendTask>,
 
     resolver: S,
-
-    cfg: Config,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
@@ -136,7 +130,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
             snap_worker: snap_worker,
             raft_msg_worker: raft_msg_worker,
             resolver: resolver,
-            cfg: cfg.clone(),
         };
 
         Ok(svr)
@@ -146,9 +139,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let ch = self.get_sendch();
         let snap_runner = SnapHandler::new(self.snap_mgr.clone(), self.ch.raft_router.clone(), ch);
         box_try!(self.snap_worker.start(snap_runner));
-
-        let raft_msg_runner = SendRunner::new(self.snap_worker.scheduler());
-        box_try!(self.raft_msg_worker.start(raft_msg_runner));
+        box_try!(self.raft_msg_worker.start(SendRunner::new()));
 
         info!("TiKV is ready to serve");
 
@@ -168,7 +159,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
     }
 
     fn write_data(&mut self, addr: SocketAddr, data: ConnData) {
-        if let Err(e) = self.raft_msg_worker.schedule(SendTask{
+        if let Err(e) = self.raft_msg_worker.schedule(SendTask {
             addr: addr,
             msg: data.msg,
         }) {

@@ -29,10 +29,8 @@ use kvproto::raft_serverpb::*;
 use kvproto::raft_serverpb_grpc::{RaftAsync, RaftAsyncClient};
 
 use util::worker::Scheduler;
-use util::transport::SendCh;
 use util::buf::PipeBuffer;
 use util::worker::FutureRunnable;
-use super::server::ServerChannel;
 use super::transport::RaftStoreRouter;
 use super::snap::Task as SnapTask;
 use super::errors::Result;
@@ -132,16 +130,12 @@ impl Conn {
 
 // SendRunner is used for sending raft messages to other stores.
 pub struct SendRunner {
-    snap_scheduler: Scheduler<SnapTask>,
     conns: HashMap<SocketAddr, Conn>,
 }
 
 impl SendRunner {
-    pub fn new(snap_scheduler: Scheduler<SnapTask>) -> SendRunner {
-        SendRunner {
-            snap_scheduler: snap_scheduler,
-            conns: HashMap::new(),
-        }
+    pub fn new() -> SendRunner {
+        SendRunner { conns: HashMap::new() }
     }
 
     fn get_conn(&mut self, addr: SocketAddr, handle: &Handle) -> Result<&Conn> {
