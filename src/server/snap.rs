@@ -23,8 +23,7 @@ use mio::Token;
 use grpc::error::GrpcError;
 use kvproto::raft_serverpb::SnapshotChunk;
 use kvproto::raft_serverpb::RaftMessage;
-use kvproto::raft_serverpb_grpc::RaftClient;
-use kvproto::raft_serverpb_grpc::Raft;
+use kvproto::tikvpb_grpc::{TiKVClient, TiKV};
 
 use raftstore::store::{SnapManager, SnapKey, SnapEntry, Snapshot};
 use util::worker::Runnable;
@@ -98,7 +97,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
     // snapshot file has been validated when created, so no need to validate again.
 
     let host = format!("{}", addr.ip());
-    let res = RaftClient::new(&*host, addr.port(), false, Default::default())
+    let res = TiKVClient::new(&*host, addr.port(), false, Default::default())
         .and_then(move |client| {
             client.Snapshot(box iter::once({
                     let mut first = SnapshotChunk::new();

@@ -11,29 +11,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::option::Option;
+use std::fmt;
 use std::sync::mpsc::Sender;
 use std::boxed::Box;
 use std::net::SocketAddr;
-
+use futures::{future, Stream, Future};
+use futures::sync::mpsc;
+use tokio_core::reactor::Handle as CoreHandle;
 use mio::{Handler, EventLoop, EventLoopConfig};
-use mio::tcp::TcpListener;
+use grpc::error::GrpcError;
 use grpc::server::GrpcServerConf;
-use kvproto::raft_serverpb_grpc::*;
 use kvproto::tikvpb_grpc::*;
-
+use kvproto::raft_serverpb::*;
 use util::worker::{Stopped, Worker};
-use util::worker::FutureWorker;
+use util::worker::{FutureWorker, FutureRunnable};
 use util::transport::SendCh;
+use util::{HashMap, HashSet};
 use storage::Storage;
 use raftstore::store::{SnapshotStatusMsg, SnapManager};
 use raft::SnapshotStatus;
-use util::{HashMap, HashSet};
 
 use super::{Msg, ConnData};
 use super::{Result, Config};
-use super::tikv_grpc::TiKVAsync;
-use super::raft_grpc::{RaftServer, SendTask, SendRunner};
+use super::handle::Handle;
 use super::transport::RaftStoreRouter;
 use super::resolve::StoreAddrResolver;
 use super::snap::{Task as SnapTask, Runner as SnapHandler};
@@ -50,12 +50,6 @@ pub fn create_event_loop<T, S>(config: &Config) -> Result<EventLoop<Server<T, S>
     Ok(el)
 }
 
-pub fn bind(addr: &str) -> Result<TcpListener> {
-    let laddr = try!(addr.parse());
-    let listener = try!(TcpListener::bind(&laddr));
-    Ok(listener)
-}
-
 // A helper structure to bundle all senders for messages to raftstore.
 pub struct ServerChannel<T: RaftStoreRouter + 'static> {
     pub raft_router: T,
@@ -65,9 +59,7 @@ pub struct ServerChannel<T: RaftStoreRouter + 'static> {
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver> {
     sendch: SendCh<Msg>,
 
-    raft_server: Option<RaftAsyncServer>,
-    kv_server: Option<TiKVAsyncServer>,
-
+    grpc_server: Option<TiKVAsyncServer>,
     local_addr: SocketAddr,
 
     // store id -> addr
@@ -100,28 +92,19 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
                -> Result<Server<T, S>> {
         let sendch = SendCh::new(event_loop.channel(), "raft-server");
         let snap_worker = Worker::new("snap-handler");
-        let raft_msg_worker = FutureWorker::new("raftmessage-worker");
+        let raft_msg_worker = FutureWorker::new("raft-msg-worker");
 
-        let h = RaftServer::new(ch.raft_router.clone(), snap_worker.scheduler());
+        let mut h = Handle::new(storage, cfg.end_point_concurrency, ch.raft_router.clone(), snap_worker.scheduler());
+        try!(h.run());
         let mut conf = GrpcServerConf::default();
         conf.http.no_delay = Some(true);
-        conf.http.thread_name = Some("raft-grpc".to_owned());
-        conf.http.reuse_port = Some(true);
-        let raft_server = RaftAsyncServer::new(cfg.addr.to_owned(), conf, h);
-
-        let addr = raft_server.local_addr().to_owned();
-
-        let h = TiKVAsync::new(storage, cfg.end_point_concurrency);
-        let mut conf = GrpcServerConf::default();
-        conf.http.no_delay = Some(true);
-        conf.http.thread_name = Some("kv-grpc".to_owned());
-        conf.http.reuse_port = Some(true);
-        let kv_server = TiKVAsyncServer::new(addr, conf, h);
+        conf.http.thread_name = Some("grpc-server".to_owned());
+        let grpc_server = TiKVAsyncServer::new(cfg.addr.to_owned(), conf, h);
+        let addr = grpc_server.local_addr().to_owned();
 
         let svr = Server {
             sendch: sendch,
-            raft_server: Some(raft_server),
-            kv_server: Some(kv_server),
+            grpc_server: Some(grpc_server),
             local_addr: addr,
             store_addrs: HashMap::default(),
             store_resolving: HashSet::default(),
@@ -311,8 +294,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Handler for Server<T, S> {
         if !el.is_running() {
             self.snap_worker.stop();
             self.raft_msg_worker.stop();
-            self.raft_server.take();
-            self.kv_server.take();
+            self.grpc_server.take();
         }
     }
 }
@@ -349,6 +331,71 @@ impl SnapshotReporter {
         }
     }
 }
+
+// SendTask delivers a raft message to other store.
+pub struct SendTask {
+    pub addr: SocketAddr,
+    pub msg: RaftMessage,
+}
+
+impl fmt::Display for SendTask {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "send raft message to {:?}", self.addr)
+    }
+}
+
+struct Conn {
+    _client: TiKVAsyncClient,
+    stream: mpsc::UnboundedSender<RaftMessage>,
+}
+
+impl Conn {
+    fn new(addr: SocketAddr, handle: &CoreHandle) -> Result<Conn> {
+        let host = format!("{}", addr.ip());
+        let client = box_try!(TiKVAsyncClient::new(&*host, addr.port(), false, Default::default()));
+        let (tx, rx) = mpsc::unbounded();
+        handle.spawn(client.Raft(box rx.map_err(|_| GrpcError::Other("canceled")))
+            .then(|_| future::ok(())));
+        Ok(Conn {
+            _client: client,
+            stream: tx,
+        })
+    }
+}
+
+// SendRunner is used for sending raft messages to other stores.
+pub struct SendRunner {
+    conns: HashMap<SocketAddr, Conn>,
+}
+
+impl SendRunner {
+    pub fn new() -> SendRunner {
+        SendRunner { conns: HashMap::default() }
+    }
+
+    fn get_conn(&mut self, addr: SocketAddr, handle: &CoreHandle) -> Result<&Conn> {
+        // TDOO: handle Conn::new() error.
+        let conn = self.conns.entry(addr).or_insert_with(|| Conn::new(addr, handle).unwrap());
+        Ok(conn)
+    }
+
+    fn send(&mut self, t: SendTask, handle: &CoreHandle) -> Result<()> {
+        let conn = try!(self.get_conn(t.addr, handle));
+        box_try!(conn.stream.send(t.msg));
+        Ok(())
+    }
+}
+
+impl FutureRunnable<SendTask> for SendRunner {
+    fn run(&mut self, t: SendTask, handle: &CoreHandle) {
+        let addr = t.addr;
+        if let Err(e) = self.send(t, handle) {
+            error!("send raft message error: {:?}", e);
+            self.conns.remove(&addr);
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

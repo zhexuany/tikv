@@ -36,14 +36,12 @@ use super::snap::Task as SnapTask;
 use super::errors::Result;
 
 // RaftServer is used for receiving raft messages from other stores.
-#[allow(dead_code)]
 pub struct RaftServer<T: RaftStoreRouter + 'static> {
     ch: Mutex<T>,
     snap_scheduler: Mutex<Scheduler<SnapTask>>,
     token: AtomicUsize, // TODO: remove it.
 }
 
-#[allow(dead_code)]
 impl<T: RaftStoreRouter + 'static> RaftServer<T> {
     pub fn new(ch: T, snap_scheduler: Scheduler<SnapTask>) -> RaftServer<T> {
         RaftServer {

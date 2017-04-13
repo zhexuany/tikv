@@ -13,40 +13,55 @@
 
 use std::boxed::FnBox;
 use std::fmt::Debug;
+use std::io::Write;
 use std::sync::Mutex;
-use grpc::futures_grpc::GrpcFutureSend;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use grpc::futures_grpc::{GrpcStreamSend, GrpcFutureSend};
 use grpc::error::GrpcError;
-use futures::Future;
+use mio::Token;
+use futures::{future, Future, Stream};
 use futures::sync::oneshot;
 use protobuf::RepeatedField;
 use kvproto::tikvpb_grpc;
+use kvproto::raft_serverpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 
-use util::worker::Worker;
+use util::worker::{Worker, Scheduler};
+use util::buf::PipeBuffer;
 use storage::{self, Storage, Key, Options, Mutation};
+use super::transport::RaftStoreRouter;
 use super::coprocessor::{RequestTask, EndPointTask, EndPointHost};
+use super::snap::Task as SnapTask;
 use super::metrics::*;
 use super::Result;
 
-#[allow(dead_code)]
 const DEFAULT_COPROCESSOR_BATCH: usize = 50;
 
-#[allow(dead_code)]
-pub struct TiKVAsync {
+pub struct Handle<T: RaftStoreRouter + 'static> {
+    // For handling KV requests.
     storage: Mutex<Storage>,
+    // For handling coprocessor requests.
     end_point_worker: Mutex<Worker<EndPointTask>>,
     end_point_concurrency: usize,
+    // For handling raft messages.
+    ch: Mutex<T>,
+    snap_scheduler: Mutex<Scheduler<SnapTask>>,
+    token: AtomicUsize, // TODO: remove it.
 }
 
-#[allow(dead_code)]
-impl TiKVAsync {
-    pub fn new(storage: Storage, end_point_concurrency: usize) -> TiKVAsync {
-        TiKVAsync {
+impl<T: RaftStoreRouter + 'static> Handle<T> {
+    pub fn new(storage: Storage, end_point_concurrency: usize, ch: T, snap_scheduler: Scheduler<SnapTask>) -> Handle<T> {
+        Handle {
             storage: Mutex::new(storage),
+
             end_point_worker: Mutex::new(Worker::new("end-point-worker")),
             end_point_concurrency: end_point_concurrency,
+
+            ch: Mutex::new(ch),
+            snap_scheduler: Mutex::new(snap_scheduler),
+            token: AtomicUsize::new(1),
         }
     }
 
@@ -60,10 +75,6 @@ impl TiKVAsync {
             .start_batch(end_point, DEFAULT_COPROCESSOR_BATCH));
         Ok(())
     }
-
-    pub fn stop(&mut self) {
-        self.end_point_worker.lock().unwrap().stop();
-    }
 }
 
 fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, GrpcFutureSend<T>) {
@@ -75,7 +86,7 @@ fn make_callback<T: Debug + Send + 'static>() -> (Box<FnBox(T) + Send>, GrpcFutu
     (box callback, box future)
 }
 
-impl tikvpb_grpc::TiKVAsync for TiKVAsync {
+impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
     fn KvGet(&self, mut p: GetRequest) -> GrpcFutureSend<GetResponse> {
         RECV_MSG_COUNTER.with_label_values(&["kv"]).inc();
         let (cb, future) = make_callback();
@@ -406,6 +417,47 @@ impl tikvpb_grpc::TiKVAsync for TiKVAsync {
             .unwrap();
         future.boxed()
     }
+
+    fn Raft(&self, s: GrpcStreamSend<RaftMessage>) -> GrpcFutureSend<Done> {
+        let ch = self.ch.lock().unwrap().clone();
+        s.for_each(move |msg| {
+            ch.send_raft_msg(msg).map_err(|_| GrpcError::Other("send raft msg fail"))
+        })
+            .and_then(|_| future::ok::<_, GrpcError>(Done::new()))
+            .boxed()
+    }
+
+    fn Snapshot(&self, s: GrpcStreamSend<SnapshotChunk>) -> GrpcFutureSend<Done> {
+        let token = Token(self.token.fetch_add(1, Ordering::SeqCst));
+        let sched = self.snap_scheduler.lock().unwrap().clone();
+        let sched2 = sched.clone();
+        s.for_each(move |mut chunk| {
+            if chunk.has_message() {
+                sched.schedule(SnapTask::Register(token, chunk.take_message()))
+                    .map_err(|_| GrpcError::Other("schedule snap_task fail"))
+            } else if !chunk.get_data().is_empty() {
+                // TODO: Remove PipeBuffer or take good use of it.
+                let mut b = PipeBuffer::new(chunk.get_data().len());
+                b.write_all(chunk.get_data()).unwrap();
+                sched.schedule(SnapTask::Write(token, b))
+                    .map_err(|_| GrpcError::Other("schedule snap_task fail"))
+            } else {
+                Err(GrpcError::Other("empty chunk"))
+            }
+        })
+            .then(move |res| {
+                let res = match res {
+                    Ok(_) => sched2.schedule(SnapTask::Close(token)),
+                    Err(e) => {
+                        error!("receive snapshot err: {}", e);
+                        sched2.schedule(SnapTask::Discard(token))
+                    }
+                };
+                future::result(res.map_err(|_| GrpcError::Other("schedule snap_task fail")))
+            })
+            .and_then(|_| future::ok::<_, GrpcError>(Done::new()))
+            .boxed()
+    }
 }
 
 use storage::txn::Error as TxnError;
@@ -507,3 +559,5 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
     }
     errs
 }
+
+
