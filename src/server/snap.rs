@@ -85,11 +85,17 @@ impl<'a, T: Snapshot + ?Sized + 'a> Iterator for SnapChunk<'a, T> {
     type Item = result::Result<Vec<u8>, io::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut buf = Vec::with_capacity(SNAP_CHUNK_LEN);
+        let mut buf = vec![0; SNAP_CHUNK_LEN];
         let mut written = 0;
         loop {
             let len = match self.snap.read(&mut buf[written..]) {
-                Ok(0) => return None,
+                Ok(0) => {
+                    return if written > 0 {
+                        Some(Ok(buf.drain(..written).collect()))
+                    } else {
+                        None
+                    }
+                }
                 Ok(len) => len,
                 Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => {
