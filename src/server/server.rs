@@ -94,7 +94,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver> Server<T, S> {
         let snap_worker = Worker::new("snap-handler");
         let raft_msg_worker = FutureWorker::new("raft-msg-worker");
 
-        let mut h = Handle::new(storage, cfg.end_point_concurrency, ch.raft_router.clone(), snap_worker.scheduler());
+        let mut h = Handle::new(storage,
+                                cfg.end_point_concurrency,
+                                ch.raft_router.clone(),
+                                snap_worker.scheduler());
         try!(h.run());
         let mut conf = GrpcServerConf::default();
         conf.http.no_delay = Some(true);

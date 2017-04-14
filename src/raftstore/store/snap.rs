@@ -1645,32 +1645,6 @@ mod v2 {
     }
 }
 
-
-const SNAP_CHUNK_LEN: usize = 1024 * 1024;
-
-impl Iterator for Snapshot {
-    type Item = Result<Vec<u8>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut buf = Vec::with_capacity(SNAP_CHUNK_LEN);
-        let mut written = 0;
-        loop {
-            let len = match self.read(&mut buf[written..]) {
-                Ok(0) => return None,
-                Ok(len) => len,
-                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    return Some(Err(Error::from(e)));
-                }
-            };
-            written += len;
-            if written >= SNAP_CHUNK_LEN {
-                return Some(Ok(buf));
-            }
-        }
-    }
-}
-
 #[derive(PartialEq, Debug)]
 pub enum SnapEntry {
     Generating = 1,

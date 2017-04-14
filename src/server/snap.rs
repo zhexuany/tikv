@@ -12,11 +12,14 @@
 // limitations under the License.
 
 use std::fmt::{self, Formatter, Display};
+use std::io;
+use std::iter::Iterator;
 use std::net::SocketAddr;
 use std::collections::hash_map::Entry;
 use std::boxed::FnBox;
 use std::time::Instant;
 use std::iter;
+use std::result;
 
 use threadpool::ThreadPool;
 use mio::Token;
@@ -72,6 +75,35 @@ impl Display for Task {
     }
 }
 
+struct SnapChunk<'a, T: Snapshot + ?Sized + 'a> {
+    snap: &'a mut T,
+}
+
+const SNAP_CHUNK_LEN: usize = 1024 * 1024;
+
+impl<'a, T: Snapshot + ?Sized + 'a> Iterator for SnapChunk<'a, T> {
+    type Item = result::Result<Vec<u8>, io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = Vec::with_capacity(SNAP_CHUNK_LEN);
+        let mut written = 0;
+        loop {
+            let len = match self.snap.read(&mut buf[written..]) {
+                Ok(0) => return None,
+                Ok(len) => len,
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    return Some(Err(e));
+                }
+            };
+            written += len;
+            if written >= SNAP_CHUNK_LEN {
+                return Some(Ok(buf));
+            }
+        }
+    }
+}
+
 /// Send the snapshot to specified address.
 ///
 /// It will first send the normal raft snapshot message and then send the snapshot file.
@@ -86,7 +118,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
         try!(SnapKey::from_snap(&snap))
     };
     mgr.register(key.clone(), SnapEntry::Sending);
-    let s = box_try!(mgr.get_snapshot_for_sending(&key));
+    let mut s = box_try!(mgr.get_snapshot_for_sending(&key));
     defer!({
         mgr.deregister(&key, &SnapEntry::Sending);
     });
@@ -94,26 +126,33 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
     let total_size = try!(s.total_size());
+
     // snapshot file has been validated when created, so no need to validate again.
+
+    // Ideally, we should not collect all chunks here, and send an iterator to Grpc clint to save
+    // memory. But inside grpc client, the iterator need to be move to another thread, and we can't
+    // send the snapshot away because we need to use it later.
+    let chunks: Vec<result::Result<SnapshotChunk, GrpcError>> = {
+        let snap_chunk = SnapChunk { snap: s.as_mut() };
+        let first = iter::once({
+            let mut chunk = SnapshotChunk::new();
+            chunk.set_message(data.msg);
+            Ok(chunk)
+        });
+        let rests = snap_chunk.map(|item| {
+            item.map(|buf| {
+                    let mut chunk = SnapshotChunk::new();
+                    chunk.set_data(buf);
+                    chunk
+                })
+                .map_err(|e| GrpcError::Io(e))
+        });
+        first.chain(rests).collect()
+    };
 
     let host = format!("{}", addr.ip());
     let res = TiKVClient::new(&*host, addr.port(), false, Default::default())
-        .and_then(move |client| {
-            client.Snapshot(box iter::once({
-                    let mut first = SnapshotChunk::new();
-                    first.set_message(data.msg);
-                    Ok(first)
-                })
-                .chain(s.map(|item| {
-                        item.map(|buf| {
-                                let mut chunk = SnapshotChunk::new();
-                                chunk.set_data(buf);
-                                chunk
-                            })
-                            .map_err(|_| GrpcError::Other(".."))
-                    })
-                    .into_iter()))
-        })
+        .and_then(|client| client.Snapshot(box chunks.into_iter()))
         .map(|_| ())
         .map_err(From::from);
 
@@ -122,7 +161,7 @@ fn send_snap(mgr: SnapManager, addr: SocketAddr, data: ConnData) -> Result<()> {
           key,
           total_size,
           timer.elapsed());
-    // s.delete(); // TODO: Fix it.
+    s.delete();
     send_timer.observe_duration();
     res
 }

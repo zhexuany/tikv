@@ -52,7 +52,11 @@ pub struct Handle<T: RaftStoreRouter + 'static> {
 }
 
 impl<T: RaftStoreRouter + 'static> Handle<T> {
-    pub fn new(storage: Storage, end_point_concurrency: usize, ch: T, snap_scheduler: Scheduler<SnapTask>) -> Handle<T> {
+    pub fn new(storage: Storage,
+               end_point_concurrency: usize,
+               ch: T,
+               snap_scheduler: Scheduler<SnapTask>)
+               -> Handle<T> {
         Handle {
             storage: Mutex::new(storage),
 
@@ -421,8 +425,8 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
     fn Raft(&self, s: GrpcStreamSend<RaftMessage>) -> GrpcFutureSend<Done> {
         let ch = self.ch.lock().unwrap().clone();
         s.for_each(move |msg| {
-            ch.send_raft_msg(msg).map_err(|_| GrpcError::Other("send raft msg fail"))
-        })
+                ch.send_raft_msg(msg).map_err(|_| GrpcError::Other("send raft msg fail"))
+            })
             .and_then(|_| future::ok::<_, GrpcError>(Done::new()))
             .boxed()
     }
@@ -432,19 +436,19 @@ impl<T: RaftStoreRouter + 'static> tikvpb_grpc::TiKVAsync for Handle<T> {
         let sched = self.snap_scheduler.lock().unwrap().clone();
         let sched2 = sched.clone();
         s.for_each(move |mut chunk| {
-            if chunk.has_message() {
-                sched.schedule(SnapTask::Register(token, chunk.take_message()))
-                    .map_err(|_| GrpcError::Other("schedule snap_task fail"))
-            } else if !chunk.get_data().is_empty() {
-                // TODO: Remove PipeBuffer or take good use of it.
-                let mut b = PipeBuffer::new(chunk.get_data().len());
-                b.write_all(chunk.get_data()).unwrap();
-                sched.schedule(SnapTask::Write(token, b))
-                    .map_err(|_| GrpcError::Other("schedule snap_task fail"))
-            } else {
-                Err(GrpcError::Other("empty chunk"))
-            }
-        })
+                if chunk.has_message() {
+                    sched.schedule(SnapTask::Register(token, chunk.take_message()))
+                        .map_err(|_| GrpcError::Other("schedule snap_task fail"))
+                } else if !chunk.get_data().is_empty() {
+                    // TODO: Remove PipeBuffer or take good use of it.
+                    let mut b = PipeBuffer::new(chunk.get_data().len());
+                    b.write_all(chunk.get_data()).unwrap();
+                    sched.schedule(SnapTask::Write(token, b))
+                        .map_err(|_| GrpcError::Other("schedule snap_task fail"))
+                } else {
+                    Err(GrpcError::Other("empty chunk"))
+                }
+            })
             .then(move |res| {
                 let res = match res {
                     Ok(_) => sched2.schedule(SnapTask::Close(token)),
@@ -559,5 +563,3 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
     }
     errs
 }
-
-
