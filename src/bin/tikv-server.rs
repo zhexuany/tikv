@@ -454,7 +454,7 @@ fn get_rocksdb_cf_option(config: &toml::Value,
     opts.set_compaction_style(compaction_style);
 
     let num_levels = get_toml_int(config, (prefix.clone() + "num-levels").as_str(), Some(7));
-    opts.set_num_levels(num_levels);
+    opts.set_num_levels(num_levels as i32);
 
     opts
 }
