@@ -446,6 +446,16 @@ fn get_rocksdb_cf_option(config: &toml::Value,
                      Some(36));
     opts.set_level_zero_stop_writes_trigger(level_zero_stop_writes_trigger as i32);
 
+    let compaction_style = get_toml_string(config,
+                                           (prefix.clone() + "compaction-style").as_str(),
+                                           Some("level".to_owned()));
+    let compaction_style = util::config::parse_rocksdb_compaction_style(&compaction_style)
+        .unwrap_or_else(|err| exit_with_err(format!("{:?}", err)));
+    opts.set_compaction_style(compaction_style);
+
+    let num_levels = get_toml_int(config, (prefix.clone() + "num-levels").as_str(), Some(7));
+    opts.set_num_levels(num_levels);
+
     opts
 }
 

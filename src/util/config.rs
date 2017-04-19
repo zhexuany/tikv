@@ -18,7 +18,7 @@ use url;
 use regex::Regex;
 
 use util::HashMap;
-use rocksdb::{DBCompressionType, DBRecoveryMode};
+use rocksdb::{DBCompressionType, DBRecoveryMode, DBCompactionStyle};
 
 quick_error! {
     #[derive(Debug)]
@@ -69,6 +69,15 @@ pub fn parse_rocksdb_per_level_compression(tp: &str)
     }
 
     Ok(result)
+}
+
+pub fn parse_rocksdb_compaction_style(tp: &str) -> Result<DBCompactionStyle, ConfigError> {
+    match &*tp.to_lowercase() {
+        "level" => Ok(DBCompactionStyle::DBLevel),
+        "universal" => Ok(DBCompactionStyle::DBUniversal),
+        "fifo" => Ok(DBCompactionStyle::DBFifo),
+        _ => Err(ConfigError::RocksDB),
+    }
 }
 
 pub fn parse_rocksdb_wal_recovery_mode(mode: i64) -> Result<DBRecoveryMode, ConfigError> {
